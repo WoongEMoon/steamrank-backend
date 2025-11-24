@@ -7,7 +7,9 @@ from datetime import datetime
 
 app = FastAPI()
 
-# CORS
+# -------------------------------------------------
+# CORS 설정
+# -------------------------------------------------
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -17,14 +19,14 @@ app.add_middleware(
 )
 
 # -------------------------------------------------
-# Render PostgreSQL 연결 정보 (네가 제공한 값)
+# Render PostgreSQL 연결 정보 (너가 제공한 값 그대로)
 # -------------------------------------------------
 DB = {
     "host": "dpg-d4i86fkhg0os73fi4keg-a",
     "dbname": "steamrank_db",
     "user": "steamrank_db_user",
     "password": "xkUGR7Y35UidHw6HooptU41A0GXXg1Jh",
-    "port": 5432
+    "port": 5432,
 }
 
 def get_db():
@@ -37,17 +39,43 @@ def get_db():
         cursor_factory=RealDictCursor
     )
 
-
 # -------------------------------------------------
-# 루트
+# 루트 페이지
 # -------------------------------------------------
 @app.get("/")
 def home():
     return {"message": "SteamRank Backend is running!"}
 
+# -------------------------------------------------
+# 테이블 자동 생성 API (한 번만 실행하면 됨)
+# -------------------------------------------------
+@app.get("/create_table")
+def create_table():
+    try:
+        conn = get_db()
+        cur = conn.cursor()
+
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS rankings (
+                date TEXT,
+                rank INTEGER,
+                appid INTEGER,
+                name TEXT,
+                concurrent_players INTEGER,
+                PRIMARY KEY(date, appid)
+            )
+        """)
+
+        conn.commit()
+        cur.close()
+        conn.close()
+
+        return {"status": "success", "message": "Table 'rankings' created."}
+    except Exception as e:
+        return {"error": str(e)}
 
 # -------------------------------------------------
-# /update  → Steam API 데이터 수집 후 DB 저장
+# /update → Steam API 크롤링 + DB 저장
 # -------------------------------------------------
 @app.get("/update")
 def update_database():
@@ -60,7 +88,6 @@ def update_database():
         data = res.json()
 
         ranks = data["response"]["ranks"]
-
         today = datetime.now().strftime("%Y-%m-%d")
 
         for game in ranks:
@@ -85,13 +112,11 @@ def update_database():
         conn.close()
 
         return {"status": "success", "message": "Database updated!"}
-
     except Exception as e:
         return {"error": str(e)}
 
-
 # -------------------------------------------------
-# /rank?date=YYYY-MM-DD → 해당 날짜 랭킹 조회
+# /rank?date=YYYY-MM-DD → 특정 날짜 랭킹 조회
 # -------------------------------------------------
 @app.get("/rank")
 def get_rank(date: str):
@@ -100,7 +125,7 @@ def get_rank(date: str):
         cur = conn.cursor()
 
         cur.execute("""
-            SELECT rank, appid, name, concurrent_players 
+            SELECT rank, appid, name, concurrent_players
             FROM rankings
             WHERE date = %s
             ORDER BY rank ASC
@@ -115,6 +140,6 @@ def get_rank(date: str):
             return {"message": "No ranking data for this date."}
 
         return rows
-
     except Exception as e:
         return {"error": str(e)}
+
