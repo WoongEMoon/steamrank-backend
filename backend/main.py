@@ -19,7 +19,7 @@ app.add_middleware(
 )
 
 # -------------------------------------------------
-# Render PostgreSQL 연결 정보 (너가 제공한 값 그대로)
+# Render PostgreSQL 연결 정보
 # -------------------------------------------------
 DB = {
     "host": "dpg-d4i86fkhg0os73fi4keg-a",
@@ -36,7 +36,7 @@ def get_db():
         user=DB["user"],
         password=DB["password"],
         port=DB["port"],
-        cursor_factory=RealDictCursor
+        cursor_factory=RealDictCursor,
     )
 
 # -------------------------------------------------
@@ -47,7 +47,7 @@ def home():
     return {"message": "SteamRank Backend is running!"}
 
 # -------------------------------------------------
-# 테이블 자동 생성 API (한 번만 실행하면 됨)
+# 테이블 자동 생성 API
 # -------------------------------------------------
 @app.get("/create_table")
 def create_table():
@@ -55,7 +55,8 @@ def create_table():
         conn = get_db()
         cur = conn.cursor()
 
-        cur.execute("""
+        cur.execute(
+            """
             CREATE TABLE IF NOT EXISTS rankings (
                 date TEXT,
                 rank INTEGER,
@@ -64,7 +65,8 @@ def create_table():
                 concurrent_players INTEGER,
                 PRIMARY KEY(date, appid)
             )
-        """)
+        """
+        )
 
         conn.commit()
         cur.close()
@@ -75,7 +77,38 @@ def create_table():
         return {"error": str(e)}
 
 # -------------------------------------------------
-# /update → Steam API 크롤링 + DB 저장
+# 게임 검색 API (자동완성용)
+# -------------------------------------------------
+@app.get("/search")
+def search_games(q: str):
+    try:
+        conn = get_db()
+        cur = conn.cursor()
+
+        cur.execute(
+            """
+            SELECT DISTINCT name
+            FROM rankings
+            WHERE LOWER(name) LIKE LOWER(%s)
+            ORDER BY name ASC
+            LIMIT 20
+        """,
+            (f"%{q}%",),
+        )
+
+        rows = cur.fetchall()
+        cur.close()
+        conn.close()
+
+        # RealDictCursor라서 각 row는 {"name": "..."} 형태
+        results = [row["name"] for row in rows]
+
+        return {"results": results}
+    except Exception as e:
+        return {"error": str(e)}
+
+# -------------------------------------------------
+# /update → SteamCharts API + DB 저장
 # -------------------------------------------------
 @app.get("/update")
 def update_database():
@@ -83,15 +116,26 @@ def update_database():
         conn = get_db()
         cur = conn.cursor()
 
+        # SteamCharts API 호출
         url = "https://api.steampowered.com/ISteamChartsService/GetMostPlayedGames/v1/?key=0E813F938A97F67C2C1B778C7691AF44"
-        res = requests.get(url)
+        res = requests.get(url, timeout=10)
         data = res.json()
 
-        ranks = data["response"]["ranks"]
+        ranks = data.get("response", {}).get("ranks", [])
+        if not ranks:
+            return {"error": "No data received from SteamCharts API"}
+
         today = datetime.now().strftime("%Y-%m-%d")
 
         for game in ranks:
-            cur.execute("""
+            rank = game.get("rank")
+            appid = game.get("appid")
+            # name 키가 없을 때를 대비한 방어 코드
+            name = game.get("name", f"Unknown ({appid})")
+            players = game.get("concurrent_players", 0)
+
+            cur.execute(
+                """
                 INSERT INTO rankings (date, rank, appid, name, concurrent_players)
                 VALUES (%s, %s, %s, %s, %s)
                 ON CONFLICT (date, appid)
@@ -99,13 +143,9 @@ def update_database():
                     rank = EXCLUDED.rank,
                     name = EXCLUDED.name,
                     concurrent_players = EXCLUDED.concurrent_players;
-            """, (
-                today,
-                game["rank"],
-                game["appid"],
-                game["name"],
-                game["concurrent_players"]
-            ))
+            """,
+                (today, rank, appid, name, players),
+            )
 
         conn.commit()
         cur.close()
@@ -124,22 +164,22 @@ def get_rank(date: str):
         conn = get_db()
         cur = conn.cursor()
 
-        cur.execute("""
+        cur.execute(
+            """
             SELECT rank, appid, name, concurrent_players
             FROM rankings
             WHERE date = %s
             ORDER BY rank ASC
-        """, (date,))
+        """,
+            (date,),
+        )
 
         rows = cur.fetchall()
-
         cur.close()
         conn.close()
 
-        if not rows:
-            return {"message": "No ranking data for this date."}
-
+        # RealDictCursor → rows는 [{"rank":..., "appid":..., ...}, ...]
+        # React에서 Array.isArray(data)로 바로 사용할 수 있게 그대로 반환
         return rows
     except Exception as e:
         return {"error": str(e)}
-
