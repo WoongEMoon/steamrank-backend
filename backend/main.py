@@ -1,10 +1,13 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+import psycopg2
+from psycopg2.extras import RealDictCursor
 import requests
+from datetime import datetime
 
 app = FastAPI()
 
-# CORS 문제 방지
+# CORS
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -13,34 +16,105 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-STEAM_API_KEY = "0E813F938A97F67C2C1B778C7691AF44"
+# -------------------------------------------------
+# Render PostgreSQL 연결 정보 (네가 제공한 값)
+# -------------------------------------------------
+DB = {
+    "host": "dpg-d4i86fkhg0os73fi4keg-a",
+    "dbname": "steamrank_db",
+    "user": "steamrank_db_user",
+    "password": "xkUGR7Y35UidHw6HooptU41A0GXXg1Jh",
+    "port": 5432
+}
 
+def get_db():
+    return psycopg2.connect(
+        host=DB["host"],
+        database=DB["dbname"],
+        user=DB["user"],
+        password=DB["password"],
+        port=DB["port"],
+        cursor_factory=RealDictCursor
+    )
+
+
+# -------------------------------------------------
+# 루트
+# -------------------------------------------------
 @app.get("/")
 def home():
     return {"message": "SteamRank Backend is running!"}
 
-# 🔍 검색 API: Steam store 검색 API 사용
-@app.get("/api/search")
-def search_games(query: str):
-    try:
-        url = f"https://steamcommunity.com/actions/SearchApps/{query}"
-        response = requests.get(url)
-        return response.json()
-    except:
-        return {"error": "Failed to fetch from Steam API"}
 
-# 🏆 인기 게임 랭킹: Steam top sellers API (community unofficial)
-@app.get("/api/rankings")
-def get_rankings():
+# -------------------------------------------------
+# /update  → Steam API 데이터 수집 후 DB 저장
+# -------------------------------------------------
+@app.get("/update")
+def update_database():
     try:
-        url = "https://api.steampowered.com/ISteamChartsService/GetMostPlayedGames/v1/?key=" + STEAM_API_KEY
+        conn = get_db()
+        cur = conn.cursor()
+
+        url = "https://api.steampowered.com/ISteamChartsService/GetMostPlayedGames/v1/?key=0E813F938A97F67C2C1B778C7691AF44"
         res = requests.get(url)
         data = res.json()
 
-        if "response" in data and "ranks" in data["response"]:
-            return data["response"]["ranks"]
+        ranks = data["response"]["ranks"]
 
-        return {"error": "Steam Ranking API changed or returned empty"}
+        today = datetime.now().strftime("%Y-%m-%d")
+
+        for game in ranks:
+            cur.execute("""
+                INSERT INTO rankings (date, rank, appid, name, concurrent_players)
+                VALUES (%s, %s, %s, %s, %s)
+                ON CONFLICT (date, appid)
+                DO UPDATE SET
+                    rank = EXCLUDED.rank,
+                    name = EXCLUDED.name,
+                    concurrent_players = EXCLUDED.concurrent_players;
+            """, (
+                today,
+                game["rank"],
+                game["appid"],
+                game["name"],
+                game["concurrent_players"]
+            ))
+
+        conn.commit()
+        cur.close()
+        conn.close()
+
+        return {"status": "success", "message": "Database updated!"}
+
+    except Exception as e:
+        return {"error": str(e)}
+
+
+# -------------------------------------------------
+# /rank?date=YYYY-MM-DD → 해당 날짜 랭킹 조회
+# -------------------------------------------------
+@app.get("/rank")
+def get_rank(date: str):
+    try:
+        conn = get_db()
+        cur = conn.cursor()
+
+        cur.execute("""
+            SELECT rank, appid, name, concurrent_players 
+            FROM rankings
+            WHERE date = %s
+            ORDER BY rank ASC
+        """, (date,))
+
+        rows = cur.fetchall()
+
+        cur.close()
+        conn.close()
+
+        if not rows:
+            return {"message": "No ranking data for this date."}
+
+        return rows
 
     except Exception as e:
         return {"error": str(e)}
