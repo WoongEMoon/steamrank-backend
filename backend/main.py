@@ -6,9 +6,9 @@ from datetime import datetime
 
 app = FastAPI()
 
-# ====================================================
-# CORS (Netlify 프론트 연결)
-# ====================================================
+# ==============================================
+# CORS
+# ==============================================
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -17,30 +17,28 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# ====================================================
+# ==============================================
 # DB 연결
-# ====================================================
+# ==============================================
 def get_db():
     return psycopg2.connect(
-        host="dpg-ctxxxxxx8enbs73hb0kg-a.oregon-postgres.render.com",
-        dbname="steam_rank",
-        user="steam_rank_user",
-        password="너의DB비번",
+        host="dpg-d4i86fkhg0os73fi4keg-a",
+        dbname="steamrank_db",
+        user="steamrank_db_user",
+        password="xkUGR7Y35UidHw6HooptU41A0GXXg1Jh",
         port="5432"
     )
 
-
-# ====================================================
+# ==============================================
 # 기본 체크
-# ====================================================
+# ==============================================
 @app.get("/")
 def home():
-    return {"message": "SteamRank Backend is running!"}
+    return {"message": "SteamRank Backend running!"}
 
-
-# ====================================================
+# ==============================================
 # rankings 테이블 생성
-# ====================================================
+# ==============================================
 @app.get("/create_table")
 def create_table():
     conn = get_db()
@@ -59,10 +57,9 @@ def create_table():
     conn.close()
     return {"status": "success", "message": "rankings table created!"}
 
-
-# ====================================================
+# ==============================================
 # games 테이블 생성
-# ====================================================
+# ==============================================
 @app.get("/create_games_table")
 def create_games_table():
     conn = get_db()
@@ -77,16 +74,12 @@ def create_games_table():
     conn.close()
     return {"status": "success", "message": "games table created!"}
 
-
-# ====================================================
-# ★ 한국 게임 데이터 394개 넣기 (자동)
-# ====================================================
+# ==============================================
+# pgAdmin에 저장된 한국 게임 394개 → 자동 삽입
+# ==============================================
 KOREAN_GAMES = [
-    # appid, name 형태로 저장
-    (1599340, "LOST ARK"),
-    (216150, "MapleStory"),
-    (340560, "던전앤파이터"),
-    # ... 너의 394개 전체를 여기에 그대로 붙여넣으면 됨
+    # (appid, "게임 이름")
+    # ⚠️ 여기에 너가 pgAdmin에서 export한 394개를 그대로 넣으면 됨
 ]
 
 @app.get("/update_games")
@@ -94,25 +87,21 @@ def update_games():
     conn = get_db()
     cur = conn.cursor()
 
-    count = 0
     for appid, name in KOREAN_GAMES:
         cur.execute("""
             INSERT INTO games (appid, name)
             VALUES (%s, %s)
-            ON CONFLICT (appid)
-            DO NOTHING;
+            ON CONFLICT (appid) DO UPDATE SET name = EXCLUDED.name;
         """, (appid, name))
-        count += 1
 
     conn.commit()
     conn.close()
 
-    return {"status": "success", "inserted": count}
+    return {"status": "success", "total_inserted": len(KOREAN_GAMES)}
 
-
-# ====================================================
+# ==============================================
 # SteamCharts TOP100 → rankings 저장
-# ====================================================
+# ==============================================
 @app.get("/update")
 def update_rankings():
     today = datetime.utcnow().strftime("%Y-%m-%d")
@@ -138,7 +127,9 @@ def update_rankings():
             INSERT INTO rankings (date, rank, appid, name, concurrent_players)
             VALUES (%s, %s, %s, %s, %s)
             ON CONFLICT (date, rank)
-            DO UPDATE SET concurrent_players = EXCLUDED.concurrent_players;
+            DO UPDATE SET
+                concurrent_players = EXCLUDED.concurrent_players,
+                name = EXCLUDED.name;
         """, (today, rank, appid, name, players))
 
     conn.commit()
@@ -146,17 +137,16 @@ def update_rankings():
 
     return {"status": "success", "message": "Rankings updated!"}
 
-
-# ====================================================
-# 한국 게임만 JOIN해서 랭킹 반환
-# ====================================================
+# ==============================================
+# 오늘의 랭킹 조회 (한국 게임 + 공식 스팀 링크용 appid 포함)
+# ==============================================
 @app.get("/rank")
 def get_rank(date: str):
     conn = get_db()
     cur = conn.cursor()
 
     cur.execute("""
-        SELECT r.rank, g.name, r.concurrent_players, g.appid
+        SELECT r.rank, r.appid, g.name, r.concurrent_players
         FROM rankings r
         JOIN games g ON r.appid = g.appid
         WHERE r.date = %s
@@ -167,43 +157,48 @@ def get_rank(date: str):
     conn.close()
 
     return [
-        {"rank": r[0], "name": r[1], "players": r[2], "appid": r[3]}
+        {
+            "rank": r[0],
+            "appid": r[1],
+            "name": r[2],
+            "players": r[3],
+            "steam_url": f"https://store.steampowered.com/app/{r[1]}"
+        }
         for r in rows
     ]
 
-
-# ====================================================
+# ==============================================
 # 자동완성 검색
-# ====================================================
+# ==============================================
 @app.get("/api/search")
 def search_game(q: str):
     conn = get_db()
     cur = conn.cursor()
 
-    search_q = f"%{q}%"
     cur.execute("""
-        SELECT name FROM games
+        SELECT appid, name FROM games
         WHERE name ILIKE %s
         ORDER BY name ASC
         LIMIT 20;
-    """, (search_q,))
+    """, (f"%{q}%",))
 
     rows = cur.fetchall()
     conn.close()
 
-    return {"results": [r[0] for r in rows]}
+    return [
+        {"appid": r[0], "name": r[1]} for r in rows
+    ]
 
-
-# ====================================================
+# ==============================================
 # React용 rankings API
-# ====================================================
+# ==============================================
 @app.get("/api/rankings")
 def api_rankings(date: str):
     conn = get_db()
     cur = conn.cursor()
 
     cur.execute("""
-        SELECT r.rank, g.name, r.concurrent_players
+        SELECT r.rank, r.appid, g.name, r.concurrent_players
         FROM rankings r
         JOIN games g ON r.appid = g.appid
         WHERE r.date = %s
@@ -215,7 +210,13 @@ def api_rankings(date: str):
 
     return {
         "rankings": [
-            {"rank": r[0], "name": r[1], "players": r[2]}
+            {
+                "rank": r[0],
+                "appid": r[1],
+                "name": r[2],
+                "players": r[3],
+                "steam_url": f"https://store.steampowered.com/app/{r[1]}"
+            }
             for r in rows
         ]
     }
