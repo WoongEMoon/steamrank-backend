@@ -1,8 +1,8 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 import psycopg2
-from datetime import datetime
-from typing import List
+from psycopg2 import OperationalError
+from typing import List, Optional
 
 DB = {
     "host": "localhost",
@@ -14,7 +14,7 @@ DB = {
 
 app = FastAPI()
 
-# CORS
+# CORS 설정
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -22,13 +22,25 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# DB 연결 함수
 def get_conn():
-    return psycopg2.connect(**DB)
+    try:
+        return psycopg2.connect(**DB)
+    except OperationalError:
+        # Render에서는 DB 없을 수 있으므로 None 반환
+        return None
 
+
+# -------------------------------
+#   API: /api/rankings
+# -------------------------------
 @app.get("/api/rankings")
 def get_rankings(date: str):
 
     conn = get_conn()
+    if conn is None:
+        return {"error": "Database connection failed (Render 환경에서는 DB 미사용 중)"}
+
     cur = conn.cursor()
 
     cur.execute("""
@@ -63,9 +75,16 @@ def get_rankings(date: str):
     return result
 
 
+# -------------------------------
+#   API: /api/search
+# -------------------------------
 @app.get("/api/search")
 def search_games(q: str):
+
     conn = get_conn()
+    if conn is None:
+        return {"error": "Database connection failed (Render 환경에서는 DB 미사용 중)"}
+
     cur = conn.cursor()
 
     cur.execute("""
@@ -88,3 +107,11 @@ def search_games(q: str):
         })
 
     return {"results": results}
+
+
+# -------------------------------
+#   홈 경로 확인용 (Render 상태 점검)
+# -------------------------------
+@app.get("/")
+async def root():
+    return {"message": "SteamRank Backend is running!"}
