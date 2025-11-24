@@ -1,0 +1,3 @@
+cd /d C:\SteamRank\backend
+call .venv\Scripts\activate
+python fetch_players.py
