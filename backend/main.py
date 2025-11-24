@@ -6,9 +6,9 @@ from datetime import datetime
 
 app = FastAPI()
 
-# ---------------------------
+# ====================================================
 # CORS (Netlify 프론트 연결)
-# ---------------------------
+# ====================================================
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -17,12 +17,12 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# ---------------------------
-# DB 연결 함수
-# ---------------------------
+# ====================================================
+# DB 연결
+# ====================================================
 def get_db():
     return psycopg2.connect(
-        host="dpg-ctxxxxxx8enbs73hb0kg-a.oregon-postgres.render.com",  # ← 너의 Render DB 호스트 입력
+        host="dpg-ctxxxxxx8enbs73hb0kg-a.oregon-postgres.render.com",
         dbname="steam_rank",
         user="steam_rank_user",
         password="너의DB비번",
@@ -30,17 +30,17 @@ def get_db():
     )
 
 
-# ---------------------------
-# 홈 체크
-# ---------------------------
+# ====================================================
+# 기본 체크
+# ====================================================
 @app.get("/")
 def home():
     return {"message": "SteamRank Backend is running!"}
 
 
-# ---------------------------
+# ====================================================
 # rankings 테이블 생성
-# ---------------------------
+# ====================================================
 @app.get("/create_table")
 def create_table():
     conn = get_db()
@@ -60,9 +60,9 @@ def create_table():
     return {"status": "success", "message": "rankings table created!"}
 
 
-# ---------------------------
+# ====================================================
 # games 테이블 생성
-# ---------------------------
+# ====================================================
 @app.get("/create_games_table")
 def create_games_table():
     conn = get_db()
@@ -70,14 +70,7 @@ def create_games_table():
     cur.execute("""
         CREATE TABLE IF NOT EXISTS games (
             appid INTEGER PRIMARY KEY,
-            name TEXT,
-            release_date TEXT,
-            developer TEXT,
-            price TEXT,
-            total_reviews INTEGER,
-            players INTEGER,
-            current_players INTEGER,
-            peak_players INTEGER
+            name TEXT
         );
     """)
     conn.commit()
@@ -85,20 +78,50 @@ def create_games_table():
     return {"status": "success", "message": "games table created!"}
 
 
-# ---------------------------
-# SteamCharts API에서 TOP 100 가져오기
-# ---------------------------
+# ====================================================
+# ★ 한국 게임 데이터 394개 넣기 (자동)
+# ====================================================
+KOREAN_GAMES = [
+    # appid, name 형태로 저장
+    (1599340, "LOST ARK"),
+    (216150, "MapleStory"),
+    (340560, "던전앤파이터"),
+    # ... 너의 394개 전체를 여기에 그대로 붙여넣으면 됨
+]
+
+@app.get("/update_games")
+def update_games():
+    conn = get_db()
+    cur = conn.cursor()
+
+    count = 0
+    for appid, name in KOREAN_GAMES:
+        cur.execute("""
+            INSERT INTO games (appid, name)
+            VALUES (%s, %s)
+            ON CONFLICT (appid)
+            DO NOTHING;
+        """, (appid, name))
+        count += 1
+
+    conn.commit()
+    conn.close()
+
+    return {"status": "success", "inserted": count}
+
+
+# ====================================================
+# SteamCharts TOP100 → rankings 저장
+# ====================================================
 @app.get("/update")
 def update_rankings():
-    # 오늘 날짜 구하기
     today = datetime.utcnow().strftime("%Y-%m-%d")
 
-    # SteamCharts API 호출
     url = "https://api.steampowered.com/ISteamChartsService/GetMostPlayedGames/v1/?key=07AB8AE83B71291C1D92C31A292BD75F"
     res = requests.get(url).json()
 
     if "response" not in res or "ranks" not in res["response"]:
-        return {"error": "Steam API 문제로 데이터 없음"}
+        return {"error": "Steam API 오류"}
 
     game_list = res["response"]["ranks"]
 
@@ -121,13 +144,12 @@ def update_rankings():
     conn.commit()
     conn.close()
 
-    return {"status": "success", "message": "Database updated!"}
+    return {"status": "success", "message": "Rankings updated!"}
 
 
-# ---------------------------
-# 한국 게임만 필터링해서 순위 반환
-# games 테이블 + rankings 테이블 JOIN
-# ---------------------------
+# ====================================================
+# 한국 게임만 JOIN해서 랭킹 반환
+# ====================================================
 @app.get("/rank")
 def get_rank(date: str):
     conn = get_db()
@@ -144,21 +166,15 @@ def get_rank(date: str):
     rows = cur.fetchall()
     conn.close()
 
-    result = []
-    for row in rows:
-        result.append({
-            "rank": row[0],
-            "name": row[1],
-            "players": row[2],
-            "appid": row[3]
-        })
-
-    return result
+    return [
+        {"rank": r[0], "name": r[1], "players": r[2], "appid": r[3]}
+        for r in rows
+    ]
 
 
-# ---------------------------
-# 검색 자동완성 API
-# ---------------------------
+# ====================================================
+# 자동완성 검색
+# ====================================================
 @app.get("/api/search")
 def search_game(q: str):
     conn = get_db()
@@ -178,9 +194,9 @@ def search_game(q: str):
     return {"results": [r[0] for r in rows]}
 
 
-# ---------------------------
-# rankings API (React용 정식 엔드포인트)
-# ---------------------------
+# ====================================================
+# React용 rankings API
+# ====================================================
 @app.get("/api/rankings")
 def api_rankings(date: str):
     conn = get_db()
