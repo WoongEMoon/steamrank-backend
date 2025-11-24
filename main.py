@@ -1,116 +1,120 @@
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel
 import psycopg2
-import os
+from psycopg2.extras import RealDictCursor
+import requests
+from datetime import datetime
 
 app = FastAPI()
 
-# CORS 설정
+# CORS
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],   # Netlify, Localhost 등 전체 허용
+    allow_origins=["*"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-# -------------------------------------------------------
-# 🔥 DB 연결 설정 (로컬 + Render 자동 전환)
-# -------------------------------------------------------
+# -------------------------------------------------
+# Render PostgreSQL 연결 정보 (네가 제공한 값)
+# -------------------------------------------------
+DB = {
+    "host": "dpg-d4i86fkhg0os73fi4keg-a",
+    "dbname": "steamrank_db",
+    "user": "steamrank_db_user",
+    "password": "xkUGR7Y35UidHw6HooptU41A0GXXg1Jh",
+    "port": 5432
+}
 
-def get_db_config():
-    """
-    Render에서는 DATABASE_URL(또는 환경변수들)을 자동 사용
-    로컬에서는 기존 localhost DB 사용
-    """
-
-    # 1) Render 환경에서 자동 감지
-    if "RENDER" in os.environ:
-        return {
-            "host": os.getenv("DB_HOST"),
-            "dbname": os.getenv("DB_NAME"),
-            "user": os.getenv("DB_USER"),
-            "password": os.getenv("DB_PASSWORD"),
-            "port": 5432
-        }
-
-    # 2) 로컬 실행 시 기존 설정 그대로 사용
-    return {
-        "host": "localhost",
-        "dbname": "Steam_Rank",
-        "user": "postgres",
-        "password": "1234",
-        "port": 5432
-    }
+def get_db():
+    return psycopg2.connect(
+        host=DB["host"],
+        database=DB["dbname"],
+        user=DB["user"],
+        password=DB["password"],
+        port=DB["port"],
+        cursor_factory=RealDictCursor
+    )
 
 
-def get_connection():
-    """PostgreSQL 연결 함수 (로컬/Render 공용)"""
-    config = get_db_config()
-    try:
-        return psycopg2.connect(
-            host=config["host"],
-            dbname=config["dbname"],
-            user=config["user"],
-            password=config["password"],
-            port=config["port"],
-        )
-    except Exception as e:
-        print("DB 연결 실패:", e)
-        raise HTTPException(status_code=500, detail="Database connection error")
-
-
-# -------------------------------------------------------
-# 🔥 API: 날짜 기준 랭킹 가져오기
-# -------------------------------------------------------
-
-@app.get("/rank/{date}")
-def get_rank(date: str):
-    """
-    날짜 기준 게임 랭킹 조회
-    예: /rank/2025-11-24
-    """
-
-    conn = get_connection()
-    cursor = conn.cursor()
-
-    try:
-        query = """
-        SELECT game_name, current_players, peak_players, game_id
-        FROM ranks
-        WHERE date = %s
-        ORDER BY rank ASC;
-        """
-
-        cursor.execute(query, (date,))
-        rows = cursor.fetchall()
-
-        if not rows:
-            return {"warning": f"{date} 데이터 없음"}
-
-        data = []
-        for row in rows:
-            data.append({
-                "game_name": row[0],
-                "current_players": row[1],
-                "peak_players": row[2],
-                "game_id": row[3]
-            })
-
-        return {"date": date, "data": data}
-
-    except Exception as e:
-        print("조회 오류:", e)
-        raise HTTPException(status_code=500, detail="Query failed")
-    finally:
-        cursor.close()
-        conn.close()
-
-
-# -------------------------------------------------------
-# 기본 홈
-# -------------------------------------------------------
+# -------------------------------------------------
+# 루트
+# -------------------------------------------------
 @app.get("/")
 def home():
     return {"message": "SteamRank Backend is running!"}
+
+
+# -------------------------------------------------
+# /update  → Steam API 데이터 수집 후 DB 저장
+# -------------------------------------------------
+@app.get("/update")
+def update_database():
+    try:
+        conn = get_db()
+        cur = conn.cursor()
+
+        url = "https://api.steampowered.com/ISteamChartsService/GetMostPlayedGames/v1/?key=0E813F938A97F67C2C1B778C7691AF44"
+        res = requests.get(url)
+        data = res.json()
+
+        ranks = data["response"]["ranks"]
+
+        today = datetime.now().strftime("%Y-%m-%d")
+
+        for game in ranks:
+            cur.execute("""
+                INSERT INTO rankings (date, rank, appid, name, concurrent_players)
+                VALUES (%s, %s, %s, %s, %s)
+                ON CONFLICT (date, appid)
+                DO UPDATE SET
+                    rank = EXCLUDED.rank,
+                    name = EXCLUDED.name,
+                    concurrent_players = EXCLUDED.concurrent_players;
+            """, (
+                today,
+                game["rank"],
+                game["appid"],
+                game["name"],
+                game["concurrent_players"]
+            ))
+
+        conn.commit()
+        cur.close()
+        conn.close()
+
+        return {"status": "success", "message": "Database updated!"}
+
+    except Exception as e:
+        return {"error": str(e)}
+
+
+# -------------------------------------------------
+# /rank?date=YYYY-MM-DD → 해당 날짜 랭킹 조회
+# -------------------------------------------------
+@app.get("/rank")
+def get_rank(date: str):
+    try:
+        conn = get_db()
+        cur = conn.cursor()
+
+        cur.execute("""
+            SELECT rank, appid, name, concurrent_players 
+            FROM rankings
+            WHERE date = %s
+            ORDER BY rank ASC
+        """, (date,))
+
+        rows = cur.fetchall()
+
+        cur.close()
+        conn.close()
+
+        if not rows:
+            return {"message": "No ranking data for this date."}
+
+        return rows
+
+    except Exception as e:
+        return {"error": str(e)}
