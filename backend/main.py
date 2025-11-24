@@ -3,7 +3,7 @@ from fastapi.middleware.cors import CORSMiddleware
 import psycopg2
 from psycopg2.extras import RealDictCursor
 import requests
-from datetime import datetime
+from datetime import datetime, date
 
 app = FastAPI()
 
@@ -29,6 +29,7 @@ DB = {
     "port": 5432,
 }
 
+
 def get_db():
     return psycopg2.connect(
         host=DB["host"],
@@ -39,32 +40,51 @@ def get_db():
         cursor_factory=RealDictCursor,
     )
 
+
 # -------------------------------------------------
 # 루트 페이지
 # -------------------------------------------------
 @app.get("/")
 def home():
-    return {"message": "SteamRank Backend is running!"}
+    return {"message": "SteamRank Backend (Korean Games) is running!"}
+
 
 # -------------------------------------------------
 # 테이블 자동 생성 API
+# games / daily_players
 # -------------------------------------------------
-@app.get("/create_table")
-def create_table():
+@app.get("/create_tables")
+def create_tables():
     try:
         conn = get_db()
         cur = conn.cursor()
 
         cur.execute(
             """
-            CREATE TABLE IF NOT EXISTS rankings (
-                date TEXT,
-                rank INTEGER,
-                appid INTEGER,
-                name TEXT,
-                concurrent_players INTEGER,
-                PRIMARY KEY(date, appid)
-            )
+            CREATE TABLE IF NOT EXISTS games (
+                appid           INTEGER PRIMARY KEY,
+                name            TEXT,
+                release_date    DATE,
+                developer       TEXT,
+                steam_appid     INTEGER,
+                profile_img     TEXT,
+                price           TEXT,
+                total_reviews   INTEGER,
+                players         INTEGER,
+                current_players INTEGER,
+                peak_players    INTEGER
+            );
+        """
+        )
+
+        cur.execute(
+            """
+            CREATE TABLE IF NOT EXISTS daily_players (
+                appid   INTEGER,
+                date    DATE,
+                players INTEGER,
+                PRIMARY KEY (appid, date)
+            );
         """
         )
 
@@ -72,12 +92,13 @@ def create_table():
         cur.close()
         conn.close()
 
-        return {"status": "success", "message": "Table 'rankings' created."}
+        return {"status": "success", "message": "Tables 'games' and 'daily_players' created."}
     except Exception as e:
         return {"error": str(e)}
 
+
 # -------------------------------------------------
-# 게임 검색 API (자동완성용)
+# 🔎 한국 게임 검색 (자동완성)
 # -------------------------------------------------
 @app.get("/search")
 def search_games(q: str):
@@ -88,7 +109,7 @@ def search_games(q: str):
         cur.execute(
             """
             SELECT DISTINCT name
-            FROM rankings
+            FROM games
             WHERE LOWER(name) LIKE LOWER(%s)
             ORDER BY name ASC
             LIMIT 20
@@ -100,63 +121,101 @@ def search_games(q: str):
         cur.close()
         conn.close()
 
-        # RealDictCursor라서 각 row는 {"name": "..."} 형태
         results = [row["name"] for row in rows]
-
         return {"results": results}
     except Exception as e:
         return {"error": str(e)}
 
+
 # -------------------------------------------------
-# /update → SteamCharts API + DB 저장
+# 📥 /update : 한국 게임 394개의 동접자 최신화
+#  - public.games 에 있는 steam_appid를 기준으로
+#  - GetNumberOfCurrentPlayers API 호출
+#  - games.current_players + daily_players 에 반영
 # -------------------------------------------------
+STEAM_PLAYER_API = (
+    "https://api.steampowered.com/ISteamUserStats/GetNumberOfCurrentPlayers/v1/"
+)
+
+
 @app.get("/update")
-def update_database():
+def update_korean_games():
     try:
         conn = get_db()
         cur = conn.cursor()
 
-        # SteamCharts API 호출
-        url = "https://api.steampowered.com/ISteamChartsService/GetMostPlayedGames/v1/?key=0E813F938A97F67C2C1B778C7691AF44"
-        res = requests.get(url, timeout=10)
-        data = res.json()
+        # 1) 한국 게임 목록 가져오기 (steam_appid 있는 것만)
+        cur.execute(
+            """
+            SELECT appid, steam_appid
+            FROM games
+            WHERE steam_appid IS NOT NULL
+        """
+        )
+        games = cur.fetchall()
 
-        ranks = data.get("response", {}).get("ranks", [])
-        if not ranks:
-            return {"error": "No data received from SteamCharts API"}
+        if not games:
+            cur.close()
+            conn.close()
+            return {"error": "No games found in 'games' table. Please import data first."}
 
-        today = datetime.now().strftime("%Y-%m-%d")
+        today = date.today()
 
-        for game in ranks:
-            rank = game.get("rank")
-            appid = game.get("appid")
-            # name 키가 없을 때를 대비한 방어 코드
-            name = game.get("name", f"Unknown ({appid})")
-            players = game.get("concurrent_players", 0)
+        updated_count = 0
 
+        for row in games:
+            appid = row["appid"]
+            steam_appid = row["steam_appid"]
+
+            try:
+                resp = requests.get(
+                    STEAM_PLAYER_API, params={"appid": steam_appid}, timeout=10
+                )
+                data = resp.json()
+                players = data.get("response", {}).get("player_count", 0)
+            except Exception:
+                players = 0
+
+            # games.current_players 갱신
             cur.execute(
                 """
-                INSERT INTO rankings (date, rank, appid, name, concurrent_players)
-                VALUES (%s, %s, %s, %s, %s)
-                ON CONFLICT (date, appid)
-                DO UPDATE SET
-                    rank = EXCLUDED.rank,
-                    name = EXCLUDED.name,
-                    concurrent_players = EXCLUDED.concurrent_players;
+                UPDATE games
+                SET current_players = %s
+                WHERE appid = %s
             """,
-                (today, rank, appid, name, players),
+                (players, appid),
             )
+
+            # daily_players upsert
+            cur.execute(
+                """
+                INSERT INTO daily_players (appid, date, players)
+                VALUES (%s, %s, %s)
+                ON CONFLICT (appid, date)
+                DO UPDATE SET players = EXCLUDED.players
+            """,
+                (appid, today, players),
+            )
+
+            updated_count += 1
 
         conn.commit()
         cur.close()
         conn.close()
 
-        return {"status": "success", "message": "Database updated!"}
+        return {
+            "status": "success",
+            "message": f"Updated {updated_count} Korean games for {today}.",
+        }
     except Exception as e:
         return {"error": str(e)}
 
+
 # -------------------------------------------------
-# /rank?date=YYYY-MM-DD → 특정 날짜 랭킹 조회
+# 📊 /rank?date=YYYY-MM-DD
+#   - 한국 게임만
+#   - 해당 날짜의 동접자를 기준으로 내림차순 정렬
+#   - React는 여기 결과를 그대로 카드로 그림
 # -------------------------------------------------
 @app.get("/rank")
 def get_rank(date: str):
@@ -166,10 +225,17 @@ def get_rank(date: str):
 
         cur.execute(
             """
-            SELECT rank, appid, name, concurrent_players
-            FROM rankings
-            WHERE date = %s
-            ORDER BY rank ASC
+            SELECT 
+                g.appid,
+                g.steam_appid,
+                g.name,
+                g.profile_img,
+                g.price,
+                dp.players
+            FROM daily_players dp
+            JOIN games g ON dp.appid = g.appid
+            WHERE dp.date = %s
+            ORDER BY dp.players DESC, g.name ASC
         """,
             (date,),
         )
@@ -178,8 +244,21 @@ def get_rank(date: str):
         cur.close()
         conn.close()
 
-        # RealDictCursor → rows는 [{"rank":..., "appid":..., ...}, ...]
-        # React에서 Array.isArray(data)로 바로 사용할 수 있게 그대로 반환
-        return rows
+        # rank 번호를 여기서 계산해서 붙여줌
+        result = []
+        for idx, row in enumerate(rows, start=1):
+            result.append(
+                {
+                    "rank": idx,
+                    "appid": row["appid"],
+                    "steam_appid": row["steam_appid"],
+                    "name": row["name"],
+                    "profile_img": row["profile_img"],
+                    "price": row["price"],
+                    "players": row["players"],
+                }
+            )
+
+        return result
     except Exception as e:
         return {"error": str(e)}
