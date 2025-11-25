@@ -37,27 +37,6 @@ def home():
     return {"message": "SteamRank Backend running!"}
 
 # ==============================================
-# rankings 테이블 생성
-# ==============================================
-@app.get("/create_table")
-def create_table():
-    conn = get_db()
-    cur = conn.cursor()
-    cur.execute("""
-        CREATE TABLE IF NOT EXISTS rankings (
-            date TEXT,
-            rank INTEGER,
-            appid INTEGER,
-            name TEXT,
-            concurrent_players INTEGER,
-            PRIMARY KEY(date, rank)
-        );
-    """)
-    conn.commit()
-    conn.close()
-    return {"status": "success", "message": "rankings table created!"}
-
-# ==============================================
 # games 테이블 생성
 # ==============================================
 @app.get("/create_games_table")
@@ -510,95 +489,36 @@ def update():
     conn = get_db()
     cur = conn.cursor()
 
-    # 오늘 날짜 (랭킹에 저장할 날짜)
-    today = datetime.utcnow().date()
+    # 1) 오늘 날짜
+    today = datetime.now().strftime("%Y-%m-%d")
 
-    # 1) games 테이블에서 "한국 게임 394개" 목록 가져오기
-    #    - steam_appid: 동접자 API에 쓸 ID
-    #    - name: 랭킹 테이블에 같이 넣을 이름
-    cur.execute("""
-        SELECT appid, name
-        FROM games;
-    """)
-    games = cur.fetchall()  # [(appid, name), ...]
+    # 2) games 테이블 전체 appid 가져오기
+    cur.execute("SELECT appid, steam_appid FROM games;")
+    rows = cur.fetchall()
 
-    results = []
+    for row in rows:
+        appid = row[0]
+        steam_appid = row[1]
 
-    # 2) 각 게임별로 동접자 수 조회
-    for appid, name in games:
+        # 3) 스팀 동접자 API 호출
+        url = f"https://api.steampowered.com/ISteamUserStats/GetNumberOfCurrentPlayers/v1/?appid={steam_appid}"
         try:
-            players_api = (
-                "https://api.steampowered.com/"
-                "ISteamUserStats/GetNumberOfCurrentPlayers/v1/"
-                f"?appid={appid}"
-            )
-            res = requests.get(players_api, timeout=5).json()
-            players = res.get("response", {}).get("player_count", 0)
-        except Exception:
+            r = requests.get(url).json()
+            players = r.get("response", {}).get("player_count", 0)
+        except:
             players = 0
 
-        results.append((appid, name, players))
-
-    # 3) 동접자 수 기준으로 내림차순 정렬 → 랭킹 번호 부여
-    results.sort(key=lambda x: x[2], reverse=True)
-
-    # 같은 날짜의 기존 랭킹은 지워버리고 새로 채운다
-    cur.execute("DELETE FROM rankings WHERE date = %s;", (today,))
-
-    # 4) rankings 테이블에 저장
-    # rankings 테이블 구조 가정:
-    #   date DATE
-    #   rank INTEGER
-    #   appid INTEGER
-    #   name TEXT
-    #   concurrent_players INTEGER
-    inserted = 0
-    for rank, (steam_appid, name, players) in enumerate(results, start=1):
-        cur.execute(
-            """
-            INSERT INTO rankings (date, rank, appid, name, concurrent_players)
-            VALUES (%s, %s, %s, %s, %s);
-            """,
-            (today, rank, steam_appid, name, players),
-        )
-        inserted += 1
+        # 4) daily_players에 입력
+        cur.execute("""
+            INSERT INTO daily_players (appid, date, players, steam_appid)
+            VALUES (%s, %s, %s, %s)
+        """, (appid, today, players, steam_appid))
 
     conn.commit()
     cur.close()
     conn.close()
 
-    return {"status": "success", "count": inserted}
-
-
-# ==============================================
-# 오늘의 랭킹 조회 (한국 게임 + 공식 스팀 링크용 appid 포함)
-# ==============================================
-@app.get("/rank")
-def get_rank(date: str):
-    conn = get_db()
-    cur = conn.cursor()
-
-    cur.execute("""
-        SELECT r.rank, r.appid, g.name, r.concurrent_players
-        FROM rankings r
-        JOIN games g ON r.appid = g.appid
-        WHERE r.date = %s
-        ORDER BY r.rank ASC;
-    """, (date,))
-
-    rows = cur.fetchall()
-    conn.close()
-
-    return [
-        {
-            "rank": r[0],
-            "appid": r[1],
-            "name": r[2],
-            "players": r[3],
-            "steam_url": f"https://store.steampowered.com/app/{r[1]}"
-        }
-        for r in rows
-    ]
+    return {"status": "success"}
 
 # ==============================================
 # 자동완성 검색
@@ -622,34 +542,35 @@ def search_game(q: str):
         {"appid": r[0], "name": r[1]} for r in rows
     ]
 
-# ==============================================
-# React용 rankings API
-# ==============================================
 @app.get("/api/rankings")
-def api_rankings(date: str):
+def get_rankings(date: str):
     conn = get_db()
     cur = conn.cursor()
 
     cur.execute("""
-        SELECT r.rank, r.appid, g.name, r.concurrent_players
-        FROM rankings r
-        JOIN games g ON r.appid = g.appid
-        WHERE r.date = %s
-        ORDER BY r.rank ASC;
+        SELECT
+            g.name,
+            g.price,
+            g.profile_img,
+            dp.players,
+            g.steam_appid
+        FROM daily_players dp
+        JOIN games g ON dp.appid = g.appid
+        WHERE dp.date = %s
+        ORDER BY dp.players DESC;
     """, (date,))
 
     rows = cur.fetchall()
     conn.close()
 
-    return {
-        "rankings": [
-            {
-                "rank": r[0],
-                "appid": r[1],
-                "name": r[2],
-                "players": r[3],
-                "steam_url": f"https://store.steampowered.com/app/{r[1]}"
-            }
-            for r in rows
-        ]
-    }
+    return [
+        {
+            "name": r[0],
+            "price": r[1],
+            "profile_img": r[2],
+            "players": r[3],
+            "steam_appid": r[4]
+        }
+        for r in rows
+    ]
+
