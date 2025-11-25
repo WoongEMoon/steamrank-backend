@@ -61,36 +61,36 @@ def update_game_in_db(name, appid, details):
 
 
 def process_file(file_path):
-    print(f"[파일 읽는 중] {file_path}")
-
-    if not os.path.exists(file_path):
-        print(f"[오류] 파일 없음 → {file_path}")
-        return
-
     with open(file_path, "r", encoding="utf-8") as f:
         lines = f.readlines()
 
     for line in lines:
         line = line.strip()
-
-        if ":" not in line:
-            print(f"[스킵] 구분자 ':' 없음 → {line}")
+        if not line:
             continue
 
-        name, appid = line.split(":")
-        name = name.strip()
-        appid = appid.strip()
+        # ① 탭 기준 먼저 시도
+        if "\t" in line:
+            appid, name = line.split("\t", 1)
 
-        print(f"[처리 시작] {name} ({appid})")
+        # ② 탭이 없으면 공백 기준 파싱
+        else:
+            parts = line.split()
+            appid = parts[0]
+            name = " ".join(parts[1:])
+
+        appid = appid.strip()
+        name = name.strip()
+
+        print(f"▶ 처리 중: {name} ({appid})")
 
         details = fetch_appdetails(appid)
         if details is None:
-            print(f"[실패] API에서 정보 없음 → {name}")
+            print(f"❌ 실패: {name} ({appid})")
             continue
 
         update_game_in_db(name, appid, details)
-
-    print("\n===== 작업 완료 =====")
+        print(f"✔ 완료: {name}")
 
 
 if __name__ == "__main__":
