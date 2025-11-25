@@ -502,68 +502,73 @@ def update_games():
 # ==============================================
 # SteamCharts TOP100 → rankings 저장
 # ==============================================
+from datetime import datetime
+import requests
+
 @app.get("/update")
 def update():
     conn = get_db()
     cur = conn.cursor()
 
-    # 1) games 테이블에서 "steam_appid"를 불러와야 한다
-    cur.execute("SELECT steam_appid FROM games WHERE steam_appid IS NOT NULL;")
-    rows = cur.fetchall()
+    # 오늘 날짜 (랭킹에 저장할 날짜)
+    today = datetime.utcnow().date()
 
-    updated = 0
+    # 1) games 테이블에서 "한국 게임 394개" 목록 가져오기
+    #    - steam_appid: 동접자 API에 쓸 ID
+    #    - name: 랭킹 테이블에 같이 넣을 이름
+    cur.execute("""
+        SELECT appid, name
+        FROM games;
+    """)
+    games = cur.fetchall()  # [(appid, name), ...]
 
-    for row in rows:
-        steam_appid = row[0]
+    results = []
 
-        # 2) 스팀 API 호출
-        url = f"https://store.steampowered.com/api/appdetails?appids={steam_appid}"
-        r = requests.get(url).json()
-
-        if not r or str(steam_appid) not in r:
-            continue
-
-        data = r[str(steam_appid)]
-
-        if not data.get("success", False):
-            continue
-
-        app_data = data["data"]
-
-        # 3) 필요한 정보 추출 (없는 값은 None 처리)
-        price = None
-        if "price_overview" in app_data:
-            price = app_data["price_overview"].get("final_formatted")
-
-        total_reviews = app_data.get("recommendations", {}).get("total", 0)
-
-        # 동접자 API
+    # 2) 각 게임별로 동접자 수 조회
+    for appid, name in games:
         try:
-            players_api = f"https://api.steampowered.com/ISteamUserStats/GetNumberOfCurrentPlayers/v1/?appid={steam_appid}"
-            players_res = requests.get(players_api).json()
-            current_players = players_res.get("response", {}).get("player_count", 0)
-        except:
-            current_players = 0
+            players_api = (
+                "https://api.steampowered.com/"
+                "ISteamUserStats/GetNumberOfCurrentPlayers/v1/"
+                f"?appid={appid}"
+            )
+            res = requests.get(players_api, timeout=5).json()
+            players = res.get("response", {}).get("player_count", 0)
+        except Exception:
+            players = 0
 
-        peak_players = current_players  # 피크는 별도 API 없으면 동일하게 둠
+        results.append((appid, name, players))
 
-        # 4) DB 업데이트
-        cur.execute("""
-            UPDATE games
-            SET price=%s,
-                total_reviews=%s,
-                current_players=%s,
-                peak_players=%s
-            WHERE steam_appid=%s;
-        """, (price, total_reviews, current_players, peak_players, steam_appid))
+    # 3) 동접자 수 기준으로 내림차순 정렬 → 랭킹 번호 부여
+    results.sort(key=lambda x: x[2], reverse=True)
 
-        updated += 1
+    # 같은 날짜의 기존 랭킹은 지워버리고 새로 채운다
+    cur.execute("DELETE FROM rankings WHERE date = %s;", (today,))
+
+    # 4) rankings 테이블에 저장
+    # rankings 테이블 구조 가정:
+    #   date DATE
+    #   rank INTEGER
+    #   appid INTEGER
+    #   name TEXT
+    #   concurrent_players INTEGER
+    inserted = 0
+    for rank, (steam_appid, name, players) in enumerate(results, start=1):
+        cur.execute(
+            """
+            INSERT INTO rankings (date, rank, appid, name, concurrent_players)
+            VALUES (%s, %s, %s, %s, %s);
+            """,
+            (today, rank, steam_appid, name, players),
+        )
+        inserted += 1
 
     conn.commit()
     cur.close()
     conn.close()
 
-    return {"status": "success", "updated": updated}
+    return {"status": "success", "count": inserted}
+
 
 # ==============================================
 # 오늘의 랭킹 조회 (한국 게임 + 공식 스팀 링크용 appid 포함)
