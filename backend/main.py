@@ -574,3 +574,18 @@ def get_rankings(date: str):
         for r in rows
     ]
 
+def fetch_price(appid):
+    try:
+        url = f"https://store.steampowered.com/api/appdetails?appids={appid}&cc=kr"
+        res = requests.get(url, timeout=5).json()
+
+        app_data = res.get(str(appid), {}).get("data", {})
+        price_info = app_data.get("price_overview", None)
+
+        if price_info is None:
+            return "Free" if app_data.get("is_free", False) else "가격 정보 없음"
+
+        return price_info.get("final_formatted", "가격 정보 없음")
+
+    except:
+        return "가격 정보 없음"
