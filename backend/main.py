@@ -477,17 +477,27 @@ def update_games():
     conn = get_db()
     cur = conn.cursor()
 
-    for appid, name in KOREAN_GAMES:
+    inserted = 0
+
+    for game in KOREAN_GAMES:
+        appid = game["steam_appid"]
+        name = game["name"]
+
         cur.execute("""
             INSERT INTO games (appid, name)
             VALUES (%s, %s)
-            ON CONFLICT (appid) DO UPDATE SET name = EXCLUDED.name;
+            ON CONFLICT (appid)
+            DO UPDATE SET name = EXCLUDED.name;
         """, (appid, name))
 
+        inserted += 1
+
     conn.commit()
+    cur.close()
     conn.close()
 
-    return {"status": "success", "total_inserted": len(KOREAN_GAMES)}
+    return {"status": "success", "total_processed": inserted}
+
 
 # ==============================================
 # SteamCharts TOP100 → rankings 저장
