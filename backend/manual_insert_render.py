@@ -1,7 +1,6 @@
 import psycopg2
 import requests
 import json
-import os
 
 DB = {
     "host": "dpg-d4i86fkhg0os73fi4keg-a",
@@ -11,6 +10,7 @@ DB = {
     "port": 5432,
     "sslmode": "require"
 }
+
 
 def get_db_connection():
     return psycopg2.connect(
@@ -22,11 +22,12 @@ def get_db_connection():
         sslmode=DB["sslmode"]
     )
 
+
 def fetch_appdetails(appid):
     url = f"https://store.steampowered.com/api/appdetails?appids={appid}"
     response = requests.get(url, timeout=10)
-    data = response.json()
 
+    data = response.json()
     if not data[str(appid)]["success"]:
         return None
 
@@ -38,32 +39,56 @@ def fetch_appdetails(appid):
     if "price_overview" in game:
         price = game["price_overview"].get("final")
 
-    total_reviews = None
-    if "recommendations" in game:
-        total_reviews = game["recommendations"].get("total")
+    return profile_img, price
 
-    return profile_img, price, total_reviews
 
 def update_game_in_db(appid, name, details):
     conn = get_db_connection()
     cur = conn.cursor()
 
-    profile_img, price, total_reviews = details
+    profile_img, price = details
 
-    cur.execute("""
-        UPDATE games
-        SET profile_img = %s,
-            price = %s,
-            total_reviews = %s
-        WHERE steam_appid = %s OR name = %s;
-    """, (profile_img, price, total_reviews, appid, name))
+    # steam_appid이 이미 있는지 확인
+    cur.execute("SELECT 1 FROM games WHERE steam_appid = %s", (appid,))
+    exists = cur.fetchone()
+
+    if exists:
+        # UPDATE
+        cur.execute("""
+            UPDATE games
+            SET profile_img = %s,
+                price = %s
+            WHERE steam_appid = %s;
+        """, (profile_img, price, appid))
+    else:
+        # 이름으로 찾기
+        cur.execute("SELECT 1 FROM games WHERE name = %s", (name,))
+        exists_by_name = cur.fetchone()
+
+        if exists_by_name:
+            # 이름 일치게임을 업데이트 + appid도 설정
+            cur.execute("""
+                UPDATE games
+                SET steam_appid = %s,
+                    profile_img = %s,
+                    price = %s
+                WHERE name = %s;
+            """, (appid, profile_img, price, name))
+        else:
+            # 완전 신규 게임이면 INSERT
+            cur.execute("""
+                INSERT INTO games (steam_appid, name, profile_img, price)
+                VALUES (%s, %s, %s, %s)
+            """, (appid, name, profile_img, price))
 
     conn.commit()
     cur.close()
     conn.close()
 
+
 def process_file(file_path):
     print(f"\n📁 파일 로딩: {file_path}")
+
     with open(file_path, "r", encoding="utf-8") as f:
         lines = f.readlines()
 
@@ -72,14 +97,13 @@ def process_file(file_path):
         if not line:
             continue
 
-        # games.txt 형식:  appid \t name
         try:
             appid, name = line.split("\t", 1)
         except:
             print(f"⚠️ 형식 오류 → {line}")
             continue
 
-        print(f"\n▶ 처리 중: {appid}    {name}")
+        print(f"\n▶ 처리 중: {appid}   {name}")
 
         details = fetch_appdetails(appid)
         if details is None:
@@ -88,6 +112,7 @@ def process_file(file_path):
 
         update_game_in_db(appid, name, details)
         print(f"✔ 완료: {name}")
+
 
 if __name__ == "__main__":
     process_file("games.txt")
