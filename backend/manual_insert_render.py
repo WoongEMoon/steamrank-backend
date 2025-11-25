@@ -1,10 +1,9 @@
 import psycopg2
 import requests
-import json
 from datetime import datetime
 
-# Render PostgreSQL
-DB = {
+# 🔹 Render PostgreSQL 설정 (정확한 값으로 수정됨)
+DB_CONFIG = {
     "host": "dpg-d4i86fkhg0os73fi4keg-a",
     "dbname": "steamrank_db",
     "user": "steamrank_db_user",
@@ -12,9 +11,11 @@ DB = {
     "port": 5432,
 }
 
-
+# ------------------------------
+# 🚀 Steam API
+# ------------------------------
 def fetch_appdetails(appid):
-    """Steam appdetails API 조회"""
+    """Steam appdetails API에서 프로필 이미지, 가격 수집"""
     url = f"https://store.steampowered.com/api/appdetails?appids={appid}"
     response = requests.get(url, timeout=10)
     data = response.json()
@@ -24,10 +25,9 @@ def fetch_appdetails(appid):
 
     game = data[str(appid)]["data"]
 
-    # 필요한 정보만 추출
     profile_img = game.get("header_image")
-
     price = None
+
     if "price_overview" in game:
         price = game["price_overview"].get("final")
 
@@ -35,7 +35,7 @@ def fetch_appdetails(appid):
 
 
 def fetch_current_players(appid):
-    """동접자 API"""
+    """Steam 동시 접속자 수"""
     url = f"https://api.steampowered.com/ISteamUserStats/GetNumberOfCurrentPlayers/v1/?appid={appid}"
     response = requests.get(url, timeout=10)
     data = response.json()
@@ -45,9 +45,11 @@ def fetch_current_players(appid):
     except:
         return 0
 
-
+# ------------------------------
+# 🚀 DB 저장 함수
+# ------------------------------
 def upsert_game(name, appid, profile_img, price):
-    """games 테이블 INSERT 또는 UPDATE"""
+    """games 테이블 저장 또는 업데이트"""
     conn = psycopg2.connect(**DB_CONFIG)
     cur = conn.cursor()
 
@@ -67,7 +69,7 @@ def upsert_game(name, appid, profile_img, price):
 
 
 def insert_daily_players(appid, count):
-    """daily_players 테이블 INSERT"""
+    """daily_players 기록"""
     conn = psycopg2.connect(**DB_CONFIG)
     cur = conn.cursor()
 
@@ -85,10 +87,10 @@ def insert_daily_players(appid, count):
     cur.close()
     conn.close()
 
-
+# ------------------------------
+# 🚀 메인 처리: 실패 리스트 제거됨
+# ------------------------------
 def process_file(file_path):
-    fail_list = []
-
     with open(file_path, "r", encoding="utf-8") as f:
         lines = f.readlines()
 
@@ -97,33 +99,26 @@ def process_file(file_path):
             continue
 
         name, appid = line.split("/")
-        name, appid = name.strip(), appid.strip()
+        name = name.strip()
+        appid = appid.strip()
 
         print(f"▶ 처리 중: {name} ({appid})")
 
-        # 상세 정보 가져오기
         details = fetch_appdetails(appid)
         if details is None:
-            print(f"❌ 실패: appdetails 없음 → {name} ({appid})")
-            fail_list.append((name, appid))
+            print(f"❌ Steam API 실패: {name}")
             continue
 
         profile_img, price = details
         current_players = fetch_current_players(appid)
 
-        # DB 저장
         upsert_game(name, appid, profile_img, price)
         insert_daily_players(appid, current_players)
 
         print(f"✔ 완료: {name}")
 
-    # 실패 로그 저장
-    if fail_list:
-        with open("manual_fail_log.txt", "w", encoding="utf-8") as f:
-            for n, a in fail_list:
-                f.write(f"{n} / {a}\n")
-        print("⚠ 실패 목록 저장 → manual_fail_log.txt")
-
-
+# ------------------------------
+# 🚀 시작
+# ------------------------------
 if __name__ == "__main__":
-    process_file("your_list.txt")  # ← 여기에 사용하는 파일명
+    process_file("games.txt")   # ← 여기에 사용될 파일명 하나만 필요
