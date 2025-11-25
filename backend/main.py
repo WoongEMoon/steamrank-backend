@@ -472,8 +472,6 @@ KOREAN_GAMES = [
     {"steam_appid": 2210700, "name": "Pechka: Historical Story Adventure | 페치카"}
 ]
 
-]
-
 @app.get("/update_games")
 def update_games():
     conn = get_db()
