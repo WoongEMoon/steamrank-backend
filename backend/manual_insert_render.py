@@ -12,7 +12,6 @@ DB = {
     "sslmode": "require",
 }
 
-
 def get_db_connection():
     return psycopg2.connect(
         host=DB["host"],
@@ -22,7 +21,6 @@ def get_db_connection():
         port=DB["port"],
         sslmode=DB["sslmode"],
     )
-
 
 # ===============================
 #      강화된 appdetails API
@@ -38,30 +36,54 @@ def fetch_appdetails(appid: str):
         print(f"✖ API 요청 실패 ({appid}): {e}")
         return None
 
-    # entry 자체가 None일 수 있음
     entry = data.get(str(appid))
-    if not isinstance(entry, dict):
-        print(f"✖ API entry 이상 ({appid}): {entry}")
-        return None
-
-    # success False
-    if not entry.get("success", False):
-        print(f"✖ appdetails success=False ({appid})")
+    if not isinstance(entry, dict) or not entry.get("success", False):
+        print(f"✖ API 데이터 이상 또는 success=False ({appid})")
         return None
 
     game = entry.get("data")
     if not isinstance(game, dict):
-        print(f"✖ data 필드 없음 ({appid}) → {game}")
+        print(f"✖ data 없음 ({appid}) → {game}")
         return None
 
+    # 썸네일
     profile_img = game.get("header_image")
 
-    price = None
+    # ===============================
+    # 🔥 가격 처리 (최종본)
+    # ===============================
+    price_str = None
     price_info = game.get("price_overview")
-    if isinstance(price_info, dict):
-        price = price_info.get("final")
+    is_free = game.get("is_free", False)
 
-    return profile_img, price
+    if is_free:
+        price_str = "free"
+
+    elif isinstance(price_info, dict):
+        currency = price_info.get("currency")
+        final = price_info.get("final")  # 정수 값
+        formatted = price_info.get("final_formatted")  # 예: "₩ 64,800"
+
+        if final is not None:
+            # ★ 한국 원화
+            if currency == "KRW":
+                price_str = formatted  # 예: "₩ 64,800"
+
+            # ★ 일본 엔화
+            elif currency == "JPY":
+                price_str = f"¥{final:,}"
+
+            # ★ 미국 달러
+            elif currency == "USD":
+                price_str = f"${final / 100:.2f}"
+
+            # ★ 기타 통화
+            else:
+                price_str = formatted if formatted else str(final)
+
+    # price_str가 None이면 자동으로 React에서 "가격 정보 없음"
+
+    return profile_img, price_str
 
 
 # ===============================
@@ -104,7 +126,7 @@ def process_file(file_path: str):
                 try:
                     appid, name = line.split("\t", 1)
                 except ValueError:
-                    print(f"✖ 형식 잘못됨, 건너뜀 → {line}")
+                    print(f"✖ 형식 잘못됨: {line}")
                     continue
 
                 appid = appid.strip()
@@ -112,20 +134,18 @@ def process_file(file_path: str):
 
                 print(f"\n▶ 처리 중: {appid}   {name}")
 
-                # API 호출
                 details = fetch_appdetails(appid)
                 if not details:
-                    print(f"✖ 처리 실패: {appid} {name} (API에서 데이터 없음)")
+                    print(f"✖ API 실패: {appid} {name}")
                     continue
 
-                # DB 업데이트
                 try:
                     update_game_in_db(conn, appid, name, details)
                     conn.commit()
                     print(f"✔ 완료: {name}")
                 except Exception as e:
                     conn.rollback()
-                    print(f"✖ DB 오류 발생, 건너뜀 ({appid} {name}): {e}")
+                    print(f"✖ DB 오류: {appid} {name}: {e}")
 
     finally:
         conn.close()
