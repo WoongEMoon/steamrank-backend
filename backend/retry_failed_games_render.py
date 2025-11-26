@@ -1,39 +1,92 @@
+import os
 import requests
 import psycopg2
 
-FAILED_FILE = "failed_games.txt"
+# === 절대 경로 기반 설정 ===
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+FAILED_FILE = os.path.join(BASE_DIR, "games_failed.txt")
+
+# === DB 연결 ===
+DB = {
+    "host": "dpg-d4i86fkhg0os73fi4keg-a",
+    "dbname": "steamrank_db",
+    "user": "steamrank_db_user",
+    "password": "xKuGR7Y35UldHw6H0optU41A0GXXg1Jh",
+    "port": 5432
+}
+
+def insert_game_to_db(appid, name, data):
+    conn = psycopg2.connect(
+        host=DB["host"],
+        dbname=DB["dbname"],
+        user=DB["user"],
+        password=DB["password"],
+        port=DB["port"]
+    )
+    cur = conn.cursor()
+
+    price = data.get("price_overview", {}).get("final", 0)
+    header_img = data.get("header_image", "")
+
+    cur.execute("""
+        INSERT INTO games (appid, name, price, profile_img)
+        VALUES (%s, %s, %s, %s)
+        ON CONFLICT (appid)
+        DO UPDATE SET
+            name = EXCLUDED.name,
+            price = EXCLUDED.price,
+            profile_img = EXCLUDED.profile_img;
+    """, (appid, name, price, header_img))
+
+    conn.commit()
+    cur.close()
+    conn.close()
+
 
 def load_failed_games():
     failed = []
+    if not os.path.exists(FAILED_FILE):
+        print(f"[ERROR] FAILED FILE NOT FOUND: {FAILED_FILE}")
+        return failed
+
     with open(FAILED_FILE, "r", encoding="utf-8") as f:
         for line in f:
-            parts = line.strip().split("\t")
+            line = line.strip()
+            if not line:
+                continue
+            parts = line.split("   ")
             if len(parts) >= 2:
-                appid, name = parts[0], parts[1]
+                appid = parts[0].strip()
+                name = parts[1].strip()
                 failed.append((appid, name))
     return failed
 
+
 def retry_failed():
     failed_games = load_failed_games()
-    print(f"총 {len(failed_games)}개 실패 게임 재시도 중...")
+    print(f"\n총 {len(failed_games)}개 실패 게임 재시도 중...\n")
 
     for appid, name in failed_games:
-        # 기존의 Steam API 요청 로직 그대로 가져오기
+        print(f"[TRY] {appid} {name}")
+
         url = f"https://store.steampowered.com/api/appdetails?appids={appid}&cc=kr&l=english"
         response = requests.get(url)
 
         if response.status_code != 200:
-            print(f"[RETRY FAIL] {appid} {name} → 여전히 실패")
+            print(f"[RETRY FAIL] {appid} {name} → status code {response.status_code}")
             continue
 
         data = response.json().get(str(appid), {})
-        if not data.get("success", False):
+        if not data.get("success"):
             print(f"[RETRY FAIL] {appid} {name} → success false")
             continue
 
-        # DB에 삽입하기 (너의 기존 insert 함수 그대로)
-        insert_game_to_db(appid, name, data["data"])
-        print(f"[RETRY OK] {appid} {name}")
+        try:
+            insert_game_to_db(appid, name, data["data"])
+            print(f"[RETRY OK] {appid} {name}")
+        except Exception as e:
+            print(f"[DB ERROR] {appid} {name} → {e}")
+
 
 if __name__ == "__main__":
     retry_failed()
