@@ -1,3 +1,5 @@
+1933700   Smilemo
+699710   Rose and Lotus: Petals of Memories | 장화홍련: 기억의 조각
 2126010   Soul Guardians
 1025960   베리드 스타즈 | BURIED STARS
 2447120   Veiled Edge | 베일드 엣지
@@ -8,7 +10,7 @@
 1153840   Snow Island
 2167600   Star Rabbits
 2104560   SOWON
-2104520   Roll me Home
+2104520   Roll me Hom
 2516280   SEOIRYE
 3683960   RUNES Magica
 1012880   Second Second
@@ -23,6 +25,7 @@
 1925860   Seonbi : Scholar of Joseon | 문경새재
 944710   TurnTack
 1210670   Silent World
+466130   White Day: A Labyrinth Named School
 1193340   Zelter
 904380   Vambrace: Cold Soul
 1042920   Unsouled
@@ -40,7 +43,6 @@
 1908500   RUNES Magica
 720150   Shikhondo(食魂徒) - Soul Eater
 1945560   World of Mines Creator's Edition
-2073850   THE FINALS
 1198810   Wolf and Pigs
 2266740   Twinkle Hunter
 1551770   Too Many Zombies!
@@ -73,6 +75,7 @@
 1758060   Ceilless
 928680   Chicken in the Darkness
 1594940   Little Witch in the Woods | 숲속의 작은 마녀
+2697930   Commander Quest
 2007770   Corrupted: Dawn of Havoc
 2637070   크롤링 랩 | Crawling Lab
 2925010   Cryptic Route
@@ -85,13 +88,11 @@
 1281890   DEFECTIVE
 1454010   루시의 일기 | Diary of Lucie
 1395420   Diaspora
-960170   DJMAX RESPECT V
 2153920   DOWNFALLEN
 2803280   Dragon Is Dead
 1042290   Duckumentary
 271760   던전 로드 | Dungeon Lord
 3419220   Dungeon Warfare
-753420   Dungreed
 1049590   이터널 리턴 | Eternal Return
 1152820   Everslash
 1477590   EZ2ON REBOOT : R
@@ -110,7 +111,6 @@
 917200   Kill the Dictator
 2183600   Kingdom Under Fire: A War of Heroes
 1125880   레이저존 | LaserZone
-287390   Last Light
 1256670   Library Of Ruina
 568220   Lobotomy Corporation | Monster Management Simulation
 1306630   Lost Ruins
@@ -137,6 +137,7 @@
 756490   Next Hero
 1301390   No Umbrellas Allowed
 1352080   SMASH LEGENDS | 스매시 레전드
+1113560   Replica
 1536210   Ira | 이라
 837090   Tree of Life: Oddria!
 334310   Plebby Quest: The Crusades | 플레비 퀘스트: 더 크루세이즈
