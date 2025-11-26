@@ -1,12 +1,11 @@
 import psycopg2
 import requests
-from datetime import datetime
 
 # ===============================
 # 🔵 Render PostgreSQL 설정
 # ===============================
 DB = {
-    "host": "dpg-d4i86fkhg0os73fi4keg-a.oregon-postgres.render.com",
+    "host": "dpg-d4i86fkhg0os73fi4keg-a",
     "dbname": "steamrank_db",
     "user": "steamrank_db_user",
     "password": "xkUGR7Y35UidHw6HooptU41A0GXXg1Jh",
@@ -17,9 +16,6 @@ DB = {
 PLAYER_API = "https://api.steampowered.com/ISteamUserStats/GetNumberOfCurrentPlayers/v1/?appid={}"
 
 
-# ===============================
-# DB 연결 함수
-# ===============================
 def get_conn():
     return psycopg2.connect(**DB)
 
@@ -27,16 +23,16 @@ def get_conn():
 # ===============================
 # 하루 기록 삽입
 # ===============================
-def insert_daily_record(appid, steam_appid, players):
+def insert_daily_record(steam_appid, players):
     conn = get_conn()
     cur = conn.cursor()
 
     cur.execute("""
-        INSERT INTO daily_players (appid, steam_appid, players, date)
-        VALUES (%s, %s, %s, CURRENT_DATE)
-        ON CONFLICT (appid, date) DO UPDATE
+        INSERT INTO daily_players (steam_appid, date, players)
+        VALUES (%s, CURRENT_DATE, %s)
+        ON CONFLICT (steam_appid, date) DO UPDATE
         SET players = EXCLUDED.players;
-    """, (appid, steam_appid, players))
+    """, (steam_appid, players))
 
     conn.commit()
     cur.close()
@@ -44,7 +40,7 @@ def insert_daily_record(appid, steam_appid, players):
 
 
 # ===============================
-# Steam API로 현재 동접자 수 가져오기
+# Steam API 호출
 # ===============================
 def get_players(steam_appid):
     try:
@@ -52,9 +48,8 @@ def get_players(steam_appid):
         res = requests.get(url, timeout=10)
         data = res.json()
         return data["response"].get("player_count", 0)
-
     except Exception as e:
-        print(f"⚠ API 오류 발생 (appid={steam_appid}): {e}")
+        print(f"⚠ API 오류 (steam_appid={steam_appid}): {e}")
         return 0
 
 
@@ -65,8 +60,9 @@ def process_all_games():
     conn = get_conn()
     cur = conn.cursor()
 
+    # 현재 DB 구조에 100% 맞는 SELECT
     cur.execute("""
-        SELECT appid, steam_appid, name
+        SELECT steam_appid, name
         FROM games
         WHERE steam_appid IS NOT NULL;
     """)
@@ -75,11 +71,11 @@ def process_all_games():
 
     print(f"\n총 {len(games)}개 게임 처리 시작\n")
 
-    for appid, steam_appid, name in games:
-        print(f"▶ 처리 중: {name} ({steam_appid})")
+    for steam_appid, name in games:
+        print(f"▶ {name} ({steam_appid}) 처리 중")
         players = get_players(steam_appid)
         print(f"   현재 동접자: {players}")
-        insert_daily_record(appid, steam_appid, players)
+        insert_daily_record(steam_appid, players)
 
     print("\n🎉 모든 게임 처리 완료!\n")
 
