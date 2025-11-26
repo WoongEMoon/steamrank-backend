@@ -2,6 +2,9 @@ import os
 import requests
 import psycopg2
 
+# ================================
+#   Render PostgreSQL 정보
+# ================================
 DB = {
     "host": "dpg-d4i86fkhg0os73fi4keg-a",
     "dbname": "steamrank_db",
@@ -10,6 +13,7 @@ DB = {
     "port": 5432,
     "sslmode": "require",
 }
+
 
 def get_db_connection():
     return psycopg2.connect(
@@ -21,9 +25,10 @@ def get_db_connection():
         sslmode=DB["sslmode"],
     )
 
-# ========================================
-#  API 요청 (manual 버전과 동일하게 통일)
-# ========================================
+
+# ================================
+#   Steam API 요청
+# ================================
 def fetch_appdetails(appid: str):
     url = f"https://store.steampowered.com/api/appdetails?appids={appid}&cc=kr&l=korean"
 
@@ -42,7 +47,7 @@ def fetch_appdetails(appid: str):
     game = entry.get("data", {})
     profile_img = game.get("header_image")
 
-    # 무료 판단
+    # 무료 여부 판정
     is_free = (
         game.get("is_free") is True
         or game.get("is_free_license") is True
@@ -52,9 +57,11 @@ def fetch_appdetails(appid: str):
     price_info = game.get("price_overview")
     price_str = None
 
+    # 무료 게임
     if is_free:
         price_str = "무료 플레이"
 
+    # 유료 게임 가격 처리
     elif isinstance(price_info, dict):
         currency = price_info.get("currency")
         final = price_info.get("final")
@@ -73,9 +80,9 @@ def fetch_appdetails(appid: str):
     return profile_img, price_str
 
 
-# ========================================
-#  DB UPSERT
-# ========================================
+# ================================
+#   DB 업데이트 (UPSERT)
+# ================================
 def update_game_in_db(conn, appid: str, name: str, details):
     profile_img, price = details
 
@@ -94,11 +101,12 @@ def update_game_in_db(conn, appid: str, name: str, details):
         )
 
 
-# ========================================
-#  실패 리스트 불러오기
-# ========================================
+# ================================
+#   실패 게임 목록 로드
+# ================================
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 FAILED_FILE = os.path.join(BASE_DIR, "games_failed.txt")
+
 
 def load_failed_games():
     failed = []
@@ -121,9 +129,9 @@ def load_failed_games():
     return failed
 
 
-# ========================================
-#  전체 재처리
-# ========================================
+# ================================
+#   전체 재시도 로직
+# ================================
 def retry_failed():
     failed_games = load_failed_games()
     print(f"▶ 재시도 대상: {len(failed_games)}개\n")
