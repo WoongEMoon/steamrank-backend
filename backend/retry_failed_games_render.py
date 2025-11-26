@@ -3,7 +3,7 @@ import requests
 import psycopg2
 
 # ================================
-#           DB 연결 설정
+#           DB 설정
 # ================================
 DB = {
     "host": "dpg-d4i86fkhg0os73fi4keg-a",
@@ -25,7 +25,7 @@ def get_db_connection():
     )
 
 # ================================
-#      강화된 appdetails API
+#      appdetails API
 # ================================
 def fetch_appdetails(appid: str):
     url = f"https://store.steampowered.com/api/appdetails?appids={appid}"
@@ -35,46 +35,41 @@ def fetch_appdetails(appid: str):
         resp.raise_for_status()
         data = resp.json()
     except Exception as e:
-        print(f"✖ API 요청 실패 ({appid}): {e}")
+        print(f"✖ API 실패 ({appid}): {e}")
         return None
 
     entry = data.get(str(appid))
-    if not isinstance(entry, dict):
-        print(f"✖ API entry 이상 ({appid}): {entry}")
-        return None
-
-    if not entry.get("success", False):
-        print(f"✖ appdetails success=False ({appid})")
+    if not isinstance(entry, dict) or not entry.get("success"):
+        print(f"✖ API entry 이상 ({appid})")
         return None
 
     game = entry.get("data", {})
-    if not isinstance(game, dict):
-        print(f"✖ data 필드 없음 ({appid}) → {game}")
-        return None
-
-    # 썸네일 이미지
     profile_img = game.get("header_image")
 
-    # 🔥 가격 처리
+    # ===============================
+    # 🔥 가격 처리 (최종본)
+    # ===============================
     price_str = None
     price_info = game.get("price_overview")
     is_free = game.get("is_free", False)
 
-    # 무료 게임
     if is_free:
         price_str = "free"
 
     elif isinstance(price_info, dict):
         currency = price_info.get("currency")
         final = price_info.get("final")
+        formatted = price_info.get("final_formatted")
 
         if final is not None:
-            # USD -> 소수점 추가
-            if currency == "USD":
-                price_str = f"{final / 100:.2f}"  # "10.99"
+            if currency == "KRW":
+                price_str = formatted
+            elif currency == "JPY":
+                price_str = f"¥{final:,}"
+            elif currency == "USD":
+                price_str = f"${final / 100:.2f}"
             else:
-                # 원화/엔화 등은 그대로 (예: 24900)
-                price_str = str(final)
+                price_str = formatted if formatted else str(final)
 
     return profile_img, price_str
 
@@ -101,7 +96,7 @@ def update_game_in_db(conn, appid: str, name: str, details):
             print(f"⚠ DB 매칭 없음 → appid={appid}, name={name}")
 
 # ================================
-#         실패 파일 로드
+#        실패 파일 처리
 # ================================
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 FAILED_FILE = os.path.join(BASE_DIR, "games_failed.txt")
@@ -119,11 +114,9 @@ def load_failed_games():
             if not line:
                 continue
 
-            # 공백 여러 개 대응
             parts = line.split()
             appid = parts[0]
             name = " ".join(parts[1:])
-
             failed.append((appid, name))
 
     return failed
@@ -143,7 +136,7 @@ def retry_failed():
 
             details = fetch_appdetails(appid)
             if not details:
-                print(f"✖ 실패 → {appid} {name} (API 데이터 없음)")
+                print(f"✖ 실패 → {appid} {name}")
                 continue
 
             try:
@@ -152,7 +145,7 @@ def retry_failed():
                 print(f"✔ 완료: {name}")
             except Exception as e:
                 conn.rollback()
-                print(f"✖ DB 오류 ({appid} {name}): {e}")
+                print(f"✖ DB 오류: {appid} {name}: {e}")
 
     finally:
         conn.close()
