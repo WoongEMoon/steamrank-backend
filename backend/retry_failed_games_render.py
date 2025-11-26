@@ -2,90 +2,147 @@ import os
 import requests
 import psycopg2
 
-# === 절대 경로 기반 설정 ===
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-FAILED_FILE = os.path.join(BASE_DIR, "games_failed.txt")
-
-# === DB 연결 ===
+# ================================
+#           DB 연결 설정
+# ================================
 DB = {
     "host": "dpg-d4i86fkhg0os73fi4keg-a",
     "dbname": "steamrank_db",
     "user": "steamrank_db_user",
     "password": "xkUGR7Y35UidHw6HooptU41A0GXXg1Jh",
-    "port": 5432
+    "port": 5432,
+    "sslmode": "require",
 }
 
-def insert_game_to_db(appid, name, data):
-    conn = psycopg2.connect(
+def get_db_connection():
+    return psycopg2.connect(
         host=DB["host"],
         dbname=DB["dbname"],
         user=DB["user"],
         password=DB["password"],
-        port=DB["port"]
+        port=DB["port"],
+        sslmode=DB["sslmode"],
     )
-    cur = conn.cursor()
 
-    price = data.get("price_overview", {}).get("final", 0)
-    header_img = data.get("header_image", "")
+# ================================
+#      강화된 appdetails API
+# ================================
+def fetch_appdetails(appid: str):
+    url = f"https://store.steampowered.com/api/appdetails?appids={appid}"
 
-    cur.execute("""
-        INSERT INTO games (appid, name, price, profile_img)
-        VALUES (%s, %s, %s, %s)
-        ON CONFLICT (appid)
-        DO UPDATE SET
-            name = EXCLUDED.name,
-            price = EXCLUDED.price,
-            profile_img = EXCLUDED.profile_img;
-    """, (appid, name, price, header_img))
+    try:
+        resp = requests.get(url, timeout=6)
+        resp.raise_for_status()
+        data = resp.json()
+    except Exception as e:
+        print(f"✖ API 요청 실패 ({appid}): {e}")
+        return None
 
-    conn.commit()
-    cur.close()
-    conn.close()
+    # entry 레벨 검증
+    entry = data.get(str(appid))
+    if not isinstance(entry, dict):
+        print(f"✖ API entry 이상 ({appid}): {entry}")
+        return None
 
+    if not entry.get("success", False):
+        print(f"✖ success=False ({appid})")
+        return None
+
+    game = entry.get("data")
+    if not isinstance(game, dict):
+        print(f"✖ data 필드 없음 ({appid}) → {game}")
+        return None
+
+    # 이미지
+    profile_img = game.get("header_image")
+
+    # 가격
+    price = None
+    price_info = game.get("price_overview")
+    if isinstance(price_info, dict):
+        price = price_info.get("final")
+
+    return profile_img, price
+
+# ================================
+#           DB UPDATE
+# ================================
+def update_game_in_db(conn, appid: str, name: str, details):
+    profile_img, price = details
+
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            UPDATE games
+               SET steam_appid = %s,
+                   name        = %s,
+                   profile_img = %s,
+                   price       = %s
+             WHERE steam_appid = %s OR name = %s
+            """,
+            (appid, name, profile_img, price, appid, name),
+        )
+
+        if cur.rowcount == 0:
+            print(f"⚠ DB 매칭 없음 → appid={appid}, name={name}")
+
+# ================================
+#         실패 파일 로드
+# ================================
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+FAILED_FILE = os.path.join(BASE_DIR, "games_failed.txt")
 
 def load_failed_games():
     failed = []
+
     if not os.path.exists(FAILED_FILE):
-        print(f"[ERROR] FAILED FILE NOT FOUND: {FAILED_FILE}")
+        print(f"[ERROR] 파일 없음: {FAILED_FILE}")
         return failed
 
     with open(FAILED_FILE, "r", encoding="utf-8") as f:
-        for line in f:
-            line = line.strip()
+        for raw in f:
+            line = raw.strip()
             if not line:
                 continue
-            parts = line.split("   ")
-            if len(parts) >= 2:
-                appid = parts[0].strip()
-                name = parts[1].strip()
-                failed.append((appid, name))
+
+            try:
+                appid, name = line.split("\t", 1)
+            except ValueError:
+                print(f"✖ 형식 이상, 건너뜀 → {line}")
+                continue
+
+            failed.append((appid.strip(), name.strip()))
+
     return failed
 
-
+# ================================
+#           전체 처리
+# ================================
 def retry_failed():
     failed_games = load_failed_games()
-    print(f"\n총 {len(failed_games)}개 실패 게임 재시도 중...\n")
+    print(f"\n▶ 재시도 대상: {len(failed_games)}개\n")
 
-    for appid, name in failed_games:
-        print(f"[TRY] {appid} {name}")
+    conn = get_db_connection()
 
-        url = f"https://store.steampowered.com/api/appdetails?appids={appid}&cc=kr&l=english"
-        response = requests.get(url)
+    try:
+        for appid, name in failed_games:
+            print(f"\n▶ 재시도: {appid}   {name}")
 
-        if response.status_code != 200:
-            print(f"[RETRY FAIL] {appid} {name} → status code {response.status_code}")
-            continue
+            details = fetch_appdetails(appid)
+            if not details:
+                print(f"✖ 실패 → {appid} {name} (API 데이터 없음)")
+                continue
 
-        data = response.json().get(str(appid), {})
-        if not data.get("success"):
-            print(f"[RETRY FAIL] {appid} {name} → success false")
-            continue
+            try:
+                update_game_in_db(conn, appid, name, details)
+                conn.commit()
+                print(f"✔ 완료: {name}")
+            except Exception as e:
+                conn.rollback()
+                print(f"✖ DB 오류 ({appid} {name}): {e}")
 
-        try:
-            insert_game_to_db(appid, name, data["data"])
-            print(f"[RETRY OK] {appid} {name}")
-        except Exception as e:
-            print(f"[DB ERROR] {appid} {name} → {e}")
+    finally:
+        conn.close()
 
 
 if __name__ == "__main__":
