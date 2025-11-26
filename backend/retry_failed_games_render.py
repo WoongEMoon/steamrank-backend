@@ -31,7 +31,7 @@ def fetch_appdetails(appid: str):
     url = f"https://store.steampowered.com/api/appdetails?appids={appid}"
 
     try:
-        resp = requests.get(url, timeout=6)
+        resp = requests.get(url, timeout=8)
         resp.raise_for_status()
         data = resp.json()
     except Exception as e:
@@ -47,7 +47,7 @@ def fetch_appdetails(appid: str):
         print(f"✖ appdetails success=False ({appid})")
         return None
 
-    game = entry.get("data")
+    game = entry.get("data", {})
     if not isinstance(game, dict):
         print(f"✖ data 필드 없음 ({appid}) → {game}")
         return None
@@ -60,24 +60,23 @@ def fetch_appdetails(appid: str):
     price_info = game.get("price_overview")
     is_free = game.get("is_free", False)
 
+    # 무료 게임
     if is_free:
-        # 무료 플레이
         price_str = "free"
+
     elif isinstance(price_info, dict):
         currency = price_info.get("currency")
-        final = price_info.get("final")  # 예: USD 10.99 -> 1099
+        final = price_info.get("final")
 
         if final is not None:
-            # 달러인 경우 소수점 둘째 자리까지 나누기
+            # USD -> 소수점 추가
             if currency == "USD":
-                price_str = f"{final / 100:.2f}"  # "10.99" 형태
+                price_str = f"{final / 100:.2f}"  # "10.99"
             else:
-                # 원화/엔화 등은 소수점 없이 사용 (나중에 KRW 포맷에 쓰자)
+                # 원화/엔화 등은 그대로 (예: 24900)
                 price_str = str(final)
-    # price_str 가 None 이면 "가격 정보 없음" 으로 처리
 
     return profile_img, price_str
-
 
 # ================================
 #           DB UPDATE
@@ -120,7 +119,7 @@ def load_failed_games():
             if not line:
                 continue
 
-            # 공백 여러 개 대응 → 첫 번째 토큰이 appid, 나머지는 name
+            # 공백 여러 개 대응
             parts = line.split()
             appid = parts[0]
             name = " ".join(parts[1:])
