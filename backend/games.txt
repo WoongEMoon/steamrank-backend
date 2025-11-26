@@ -115,7 +115,6 @@
 2226730	OVIS LOOP
 2232200	첫눈
 2473710	Abyss School | 어비스 스쿨
-	갤럭시 테일즈: 스토리 오브 라푼젤 | Galaxy Tales: Story of Rapunzel
 1412470	GranAge
 814870	모나드의 겨울
 2482920	사람 속에 피는 꽃 | Flower in Us
@@ -194,7 +193,6 @@
 2436940	Sephiria
 1045720	The Coma 2: Vicious Sisters
 600090	The Coma: Recut
-1573100	Subterrain 2
 1573100	Subterrain: Mines of Titan
 938220	TAPSONIC BOLD
 2347910	Seal: WHAT the FUN
@@ -266,7 +264,6 @@
 1227320	Shutter Nyan! Enhanced Edition | 셔터냥! Enhanced Edition
 1934020	Polar Penguin Post | 폴라 펭귄 포스트
 2356450	길고양이 이야기 2: 집밖은 위험해 | A Street Cat's Tale 2: Out side is dangerous
-	가짜 하트 | FAKE HEART
 2090760	X Invader | 엑스 인베이더
 1683100	Ultra Age | 울트라 에이지
 2207300	블루 웬즈데이 | Blue Wednesday

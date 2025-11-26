@@ -1,7 +1,7 @@
 import psycopg2
 import requests
 import json
-import re
+import time
 
 DB = {
     "host": "dpg-d4i86fkhg0os73fi4keg-a",
@@ -9,8 +9,9 @@ DB = {
     "user": "steamrank_db_user",
     "password": "xkUGR7Y35UidHw6HooptU41A0GXXg1Jh",
     "port": 5432,
-    "sslmode": "require"
+    "sslmode": "require",
 }
+
 
 def get_db_connection():
     return psycopg2.connect(
@@ -19,97 +20,116 @@ def get_db_connection():
         user=DB["user"],
         password=DB["password"],
         port=DB["port"],
-        sslmode=DB["sslmode"]
+        sslmode=DB["sslmode"],
     )
 
-def fetch_appdetails(appid):
-    url = f"https://store.steampowered.com/api/appdetails?appids={appid}"
-    response = requests.get(url, timeout=10)
 
-    data = response.json()
-    if not data[str(appid)]["success"]:
+# ===============================
+#      강화된 appdetails API
+# ===============================
+def fetch_appdetails(appid: str):
+    url = f"https://store.steampowered.com/api/appdetails?appids={appid}"
+
+    try:
+        resp = requests.get(url, timeout=6)
+        resp.raise_for_status()
+        data = resp.json()
+    except Exception as e:
+        print(f"✖ API 요청 실패 ({appid}): {e}")
         return None
 
-    game = data[str(appid)]["data"]
+    # entry 자체가 None일 수 있음
+    entry = data.get(str(appid))
+    if not isinstance(entry, dict):
+        print(f"✖ API entry 이상 ({appid}): {entry}")
+        return None
+
+    # success False
+    if not entry.get("success", False):
+        print(f"✖ appdetails success=False ({appid})")
+        return None
+
+    game = entry.get("data")
+    if not isinstance(game, dict):
+        print(f"✖ data 필드 없음 ({appid}) → {game}")
+        return None
 
     profile_img = game.get("header_image")
-    price = None
 
-    if "price_overview" in game:
-        price = game["price_overview"].get("final")
+    price = None
+    price_info = game.get("price_overview")
+    if isinstance(price_info, dict):
+        price = price_info.get("final")
 
     return profile_img, price
 
-def update_game_in_db(appid, name, details):
-    conn = get_db_connection()
-    cur = conn.cursor()
 
+# ===============================
+#        DB UPDATE
+# ===============================
+def update_game_in_db(conn, appid: str, name: str, details):
     profile_img, price = details
 
-    # check existing by appid
-    cur.execute("SELECT 1 FROM games WHERE steam_appid = %s", (appid,))
-    exists = cur.fetchone()
-
-    if exists:
-        cur.execute("""
+    with conn.cursor() as cur:
+        cur.execute(
+            """
             UPDATE games
-            SET profile_img = %s,
-                price = %s
-            WHERE steam_appid = %s;
-        """, (profile_img, price, appid))
+               SET steam_appid = %s,
+                   profile_img = %s,
+                   price       = %s
+             WHERE steam_appid = %s OR name = %s
+            """,
+            (appid, profile_img, price, appid, name),
+        )
 
-    else:
-        # check by name
-        cur.execute("SELECT 1 FROM games WHERE name = %s", (name,))
-        exists_by_name = cur.fetchone()
+        if cur.rowcount == 0:
+            print(f"⚠ DB에 매칭되는 행 없음 → appid={appid}, name={name}")
 
-        if exists_by_name:
-            cur.execute("""
-                UPDATE games
-                SET steam_appid = %s,
-                    profile_img = %s,
-                    price = %s
-                WHERE name = %s;
-            """, (appid, profile_img, price, name))
-        else:
-            # full insert
-            cur.execute("""
-                INSERT INTO games (steam_appid, name, profile_img, price)
-                VALUES (%s, %s, %s, %s)
-            """, (appid, name, profile_img, price))
 
-    conn.commit()
-    cur.close()
-    conn.close()
+# ===============================
+#       파일 전체 처리
+# ===============================
+def process_file(file_path: str):
 
-def process_file(file_path):
-    print(f"\n📁 파일 로딩: {file_path}")
+    print(f"▶ 파일 로딩: {file_path}")
+    conn = get_db_connection()
 
-    with open(file_path, "r", encoding="utf-8") as f:
-        lines = f.readlines()
+    try:
+        with open(file_path, "r", encoding="utf-8") as f:
+            for raw in f:
+                line = raw.strip()
+                if not line:
+                    continue
 
-    for line in lines:
-        line = line.strip()
-        if not line:
-            continue
+                try:
+                    appid, name = line.split("\t", 1)
+                except ValueError:
+                    print(f"✖ 형식 잘못됨, 건너뜀 → {line}")
+                    continue
 
-        # ★★★ 핵심: 숫자로 시작하는 appid 추출하고 나머지 전체를 name으로 처리
-        match = re.match(r"^(\d+)\s+(.*)$", line)
-        if not match:
-            print(f"⚠️ 파싱 실패 → {line}")
-            continue
+                appid = appid.strip()
+                name = name.strip()
 
-        appid, name = match.groups()
+                print(f"\n▶ 처리 중: {appid}   {name}")
 
-        print(f"\n▶ 처리 중: {appid}   {name}")
+                # API 호출
+                details = fetch_appdetails(appid)
+                if not details:
+                    print(f"✖ 처리 실패: {appid} {name} (API에서 데이터 없음)")
+                    continue
 
-        details = fetch_appdetails(appid)
-        if details is None:
-            print(f"❌ API 실패: {name}")
-            continue
+                # DB 업데이트
+                try:
+                    update_game_in_db(conn, appid, name, details)
+                    conn.commit()
+                    print(f"✔ 완료: {name}")
+                except Exception as e:
+                    conn.rollback()
+                    print(f"✖ DB 오류 발생, 건너뜀 ({appid} {name}): {e}")
 
-        update_game_in_db(appid, name, details)
-        print(f"✔ 완료: {name}")
+    finally:
+        conn.close()
+
 
 if __name__ == "__main__":
     process_file("games.txt")
