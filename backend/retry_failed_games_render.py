@@ -11,7 +11,7 @@ DB = {
     "host": "dpg-d4i86fkhg0os73fi4keg-a",
     "dbname": "steamrank_db",
     "user": "steamrank_db_user",
-    "password": "xKuGR7Y35UldHw6H0optU41A0GXXg1Jh",
+    "password": "xkUGR7Y35UidHw6HooptU41A0GXXg1Jh",
     "port": 5432
 }
 
