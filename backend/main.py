@@ -26,35 +26,74 @@ def get_db():
         dbname="steamrank_db",
         user="steamrank_db_user",
         password="xkUGR7Y35UidHw6HooptU41A0GXXg1Jh",
-        port="5432"
+        port="5432",
+        sslmode="require"
     )
 
 # ==============================================
-# 기본 체크
+# 기본 홈
 # ==============================================
 @app.get("/")
 def home():
     return {"message": "SteamRank Backend running!"}
 
 # ==============================================
-# games 테이블 생성
+# 스팀 동접자 업데이트
 # ==============================================
-@app.get("/create_games_table")
-def create_games_table():
+@app.get("/update")
+def update_players():
     conn = get_db()
     cur = conn.cursor()
-    cur.execute("""
-        CREATE TABLE IF NOT EXISTS games (
-            appid INTEGER PRIMARY KEY,
-            name TEXT
-        );
-    """)
+
+    today = datetime.now().strftime("%Y-%m-%d")
+
+    # games 테이블에서 appid + steam_appid 가져오기
+    cur.execute("SELECT appid, steam_appid FROM games;")
+    games = cur.fetchall()
+
+    for appid, steam_appid in games:
+        url = f"https://api.steampowered.com/ISteamUserStats/GetNumberOfCurrentPlayers/v1/?appid={steam_appid}"
+
+        try:
+            data = requests.get(url, timeout=4).json()
+            players = data.get("response", {}).get("player_count", 0)
+        except:
+            players = 0
+
+        cur.execute("""
+            INSERT INTO daily_players (appid, date, players, steam_appid)
+            VALUES (%s, %s, %s, %s)
+        """, (appid, today, players, steam_appid))
+
     conn.commit()
+    cur.close()
     conn.close()
-    return {"status": "success", "message": "games table created!"}
+
+    return {"status": "success"}
 
 # ==============================================
-# pgAdmin에 저장된 한국 게임 394개 → 자동 삽입
+# 자동완성 검색
+# ==============================================
+@app.get("/api/search")
+def search_game(q: str):
+    conn = get_db()
+    cur = conn.cursor()
+
+    cur.execute("""
+        SELECT appid, name 
+        FROM games
+        WHERE name ILIKE %s
+        ORDER BY name ASC
+        LIMIT 20;
+    """, (f"%{q}%",))
+
+    rows = cur.fetchall()
+    conn.close()
+
+    return [{"appid": r[0], "name": r[1]} for r in rows]
+
+# ==============================================
+# 날짜별 랭킹 조회
 # ==============================================
 KOREAN_GAMES = [
     {"steam_appid": 2119580, "name": "골든 레코드 리트리버"},
@@ -450,105 +489,13 @@ KOREAN_GAMES = [
     {"steam_appid": 2680010, "name": "The First Berserker: Khazan | 퍼스트 버서커: 카잔"},
     {"steam_appid": 2210700, "name": "Pechka: Historical Story Adventure | 페치카"}
 ]
-
-@app.get("/update_games")
-def update_games():
-    conn = get_db()
-    cur = conn.cursor()
-
-    inserted = 0
-
-    for game in KOREAN_GAMES:
-        appid = game["steam_appid"]
-        name = game["name"]
-
-        cur.execute("""
-            INSERT INTO games (appid, name)
-            VALUES (%s, %s)
-            ON CONFLICT (appid)
-            DO UPDATE SET name = EXCLUDED.name;
-        """, (appid, name))
-
-        inserted += 1
-
-    conn.commit()
-    cur.close()
-    conn.close()
-
-    return {"status": "success", "total_processed": inserted}
-
-
-# ==============================================
-# SteamCharts TOP100 → rankings 저장
-# ==============================================
-from datetime import datetime
-import requests
-
-@app.get("/update")
-def update():
-    conn = get_db()
-    cur = conn.cursor()
-
-    # 1) 오늘 날짜
-    today = datetime.now().strftime("%Y-%m-%d")
-
-    # 2) games 테이블 전체 appid 가져오기
-    cur.execute("SELECT appid, steam_appid FROM games;")
-    rows = cur.fetchall()
-
-    for row in rows:
-        appid = row[0]
-        steam_appid = row[1]
-
-        # 3) 스팀 동접자 API 호출
-        url = f"https://api.steampowered.com/ISteamUserStats/GetNumberOfCurrentPlayers/v1/?appid={steam_appid}"
-        try:
-            r = requests.get(url).json()
-            players = r.get("response", {}).get("player_count", 0)
-        except:
-            players = 0
-
-        # 4) daily_players에 입력
-        cur.execute("""
-            INSERT INTO daily_players (appid, date, players, steam_appid)
-            VALUES (%s, %s, %s, %s)
-        """, (appid, today, players, steam_appid))
-
-    conn.commit()
-    cur.close()
-    conn.close()
-
-    return {"status": "success"}
-
-# ==============================================
-# 자동완성 검색
-# ==============================================
-@app.get("/api/search")
-def search_game(q: str):
-    conn = get_db()
-    cur = conn.cursor()
-
-    cur.execute("""
-        SELECT appid, name FROM games
-        WHERE name ILIKE %s
-        ORDER BY name ASC
-        LIMIT 20;
-    """, (f"%{q}%",))
-
-    rows = cur.fetchall()
-    conn.close()
-
-    return [
-        {"appid": r[0], "name": r[1]} for r in rows
-    ]
-
 @app.get("/api/rankings")
 def get_rankings(date: str):
     conn = get_db()
     cur = conn.cursor()
 
     cur.execute("""
-        SELECT
+        SELECT 
             g.name,
             g.price,
             g.profile_img,
@@ -573,19 +520,3 @@ def get_rankings(date: str):
         }
         for r in rows
     ]
-
-def fetch_price(appid):
-    try:
-        url = f"https://store.steampowered.com/api/appdetails?appids={appid}&cc=kr"
-        res = requests.get(url, timeout=5).json()
-
-        app_data = res.get(str(appid), {}).get("data", {})
-        price_info = app_data.get("price_overview", None)
-
-        if price_info is None:
-            return "Free" if app_data.get("is_free", False) else "가격 정보 없음"
-
-        return price_info.get("final_formatted", "가격 정보 없음")
-
-    except:
-        return "가격 정보 없음"
