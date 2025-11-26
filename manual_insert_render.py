@@ -1,127 +1,125 @@
 import psycopg2
 import requests
-import json
-import time
 
+# ---------- DB 설정 (Render) ----------
 DB = {
     "host": "dpg-d4i86fkhg0os73fi4keg-a",
     "dbname": "steamrank_db",
     "user": "steamrank_db_user",
     "password": "xkUGR7Y35UidHw6HooptU41A0GXXg1Jh",
     "port": 5432,
-    "sslmode": "require"  # Render에서는 반드시 필요함
+    "sslmode": "require",
 }
 
 
-# ------------------------------
-# DB 연결
-# ------------------------------
+# ---------- DB 연결 ----------
 def get_db_connection():
-    try:
-        conn = psycopg2.connect(
-            host=DB["host"],
-            dbname=DB["dbname"],
-            user=DB["user"],
-            password=DB["password"],
-            port=DB["port"],
-            sslmode=DB["sslmode"]
-        )
-        return conn
-    except Exception as e:
-        print("❌ DB 연결 실패:", e)
-        raise
+    return psycopg2.connect(
+        host=DB["host"],
+        dbname=DB["dbname"],
+        user=DB["user"],
+        password=DB["password"],
+        port=DB["port"],
+        sslmode=DB["sslmode"],
+    )
 
 
-# ------------------------------
-# Steam appdetails API 호출
-# ------------------------------
-def fetch_appdetails(appid):
+# ---------- Steam appdetails 호출 ----------
+def fetch_appdetails(appid: str):
     url = f"https://store.steampowered.com/api/appdetails?appids={appid}"
 
     try:
-        response = requests.get(url, timeout=10)
-        data = response.json()
-
-        if not data[str(appid)]["success"]:
-            print(f"❌ API 실패: {appid}")
-            return None
-
-        game = data[str(appid)]["data"]
-
-        # 필요한 값 추출
-        profile_img = game.get("header_image")
-        price = None
-        if "price_overview" in game:
-            price = game["price_overview"].get("final")
-
-        total_reviews = None
-        if "recommendations" in game:
-            total_reviews = game["recommendations"].get("total")
-
-        return profile_img, price, total_reviews
-
+        resp = requests.get(url, timeout=10)
+        resp.raise_for_status()
+        data = resp.json()
     except Exception as e:
-        print(f"❌ API 호출 중 오류 ({appid}):", e)
+        print(f"✖ API 요청 실패 ({appid}): {e}")
         return None
 
+    entry = data.get(str(appid))
 
-# ------------------------------
-# DB 업데이트
-# ------------------------------
-def update_game_in_db(name, appid, details):
-    conn = get_db_connection()
-    cur = conn.cursor()
+    # entry 구조 이상 / success False 모두 여기서 컷
+    if not isinstance(entry, dict):
+        print(f"✖ API 응답 형식 이상 ({appid}): {entry}")
+        return None
 
-    profile_img, price, total_reviews = details
+    if not entry.get("success"):
+        print(f"✖ appdetails 없음 ({appid})")
+        return None
 
-    try:
-        cur.execute("""
+    game = entry.get("data") or {}
+
+    profile_img = game.get("header_image")
+
+    price = None
+    price_info = game.get("price_overview")
+    if isinstance(price_info, dict):
+        # 센트 단위 정수(예: 1599 → 15.99달러)
+        price = price_info.get("final")
+
+    return profile_img, price
+
+
+# ---------- DB 업데이트 (UPDATE만) ----------
+def update_game_in_db(conn, appid: str, name: str, details):
+    profile_img, price = details
+
+    with conn.cursor() as cur:
+        cur.execute(
+            """
             UPDATE games
-            SET
-                steam_appid = %s,
-                profile_img = %s,
-                price = %s,
-                total_reviews = %s
-            WHERE name = %s;
-        """, (appid, profile_img, price, total_reviews, name))
+               SET steam_appid = %s,
+                   profile_img = %s,
+                   price       = %s
+             WHERE steam_appid = %s OR name = %s
+            """,
+            (appid, profile_img, price, appid, name),
+        )
 
-        conn.commit()
-        print(f"✔ DB 업데이트 완료: {name}")
+        if cur.rowcount == 0:
+            # 매칭되는 행이 없으면 그냥 알려만 주고 넘어감
+            print(f"   ⚠ DB에 해당 게임 없음 → appid={appid}, name={name}")
 
-    except Exception as e:
-        print(f"❌ DB 업데이트 실패: {name} ({appid})", e)
+
+# ---------- 파일 전체 처리 ----------
+def process_file(file_path: str):
+    print(f"▶ 파일 로딩: {file_path}")
+
+    conn = get_db_connection()
+    try:
+        with open(file_path, "r", encoding="utf-8") as f:
+            for raw_line in f:
+                line = raw_line.strip()
+                if not line:
+                    continue
+
+                # appid<TAB>이름 형식
+                try:
+                    appid, name = line.split("\t", 1)
+                except ValueError:
+                    print(f"✖ 형식 이상, 건너뜀: {line}")
+                    continue
+
+                appid = appid.strip()
+                name = name.strip()
+
+                print(f"▶ 처리 중: {appid}   {name}")
+
+                try:
+                    details = fetch_appdetails(appid)
+                    if not details:
+                        print(f"✖ 처리 실패: {appid} {name} (appdetails 없음)")
+                        continue
+
+                    update_game_in_db(conn, appid, name, details)
+                    conn.commit()
+                    print(f"✔ 완료: {name}")
+                except Exception as e:
+                    conn.rollback()
+                    print(f"✖ 예외 발생, 건너뜀: {appid} {name} → {e}")
 
     finally:
-        cur.close()
         conn.close()
-
-
-# ------------------------------
-# 파일 읽기 + 처리
-# ------------------------------
-def process_file(file_path):
-    print(f"📂 파일 로딩: {file_path}")
-
-    with open(file_path, "r", encoding="utf-8") as f:
-        lines = f.readlines()
-
-    for line in lines:
-        if ":" not in line:
-            continue
-
-        name, appid = line.split(":", 1)
-        name = name.strip()
-        appid = appid.strip()
-
-        print(f"\n▶ 처리 중: {name} ({appid})")
-
-        details = fetch_appdetails(appid)
-        if details is None:
-            print(f"❌ 처리 실패: {name}")
-            continue
-
-        update_game_in_db(name, appid, details)
-        time.sleep(1)  # 너무 빠른 API 호출 방지
 
 
 if __name__ == "__main__":
