@@ -82,18 +82,16 @@ def update_game_in_db(conn, appid: str, name: str, details):
     with conn.cursor() as cur:
         cur.execute(
             """
-            UPDATE games
-               SET steam_appid = %s,
-                   name        = %s,
-                   profile_img = %s,
-                   price       = %s
-             WHERE steam_appid = %s OR name = %s
+            INSERT INTO games (steam_appid, name, profile_img, price)
+            VALUES (%s, %s, %s, %s)
+            ON CONFLICT (steam_appid)
+            DO UPDATE SET
+                name = EXCLUDED.name,
+                profile_img = EXCLUDED.profile_img,
+                price = EXCLUDED.price;
             """,
-            (appid, name, profile_img, price, appid, name),
+            (appid, name, profile_img, price),
         )
-
-        if cur.rowcount == 0:
-            print(f"⚠ DB 매칭 없음 → appid={appid}, name={name}")
 
 # ================================
 #        실패 파일 처리
