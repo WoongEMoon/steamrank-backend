@@ -38,7 +38,6 @@ def fetch_appdetails(appid: str):
         print(f"✖ API 요청 실패 ({appid}): {e}")
         return None
 
-    # entry 레벨 검증
     entry = data.get(str(appid))
     if not isinstance(entry, dict):
         print(f"✖ API entry 이상 ({appid}): {entry}")
@@ -105,13 +104,12 @@ def load_failed_games():
             if not line:
                 continue
 
-            try:
-                appid, name = line.split("\t", 1)
-            except ValueError:
-                print(f"✖ 형식 이상, 건너뜀 → {line}")
-                continue
+            # 공백 여러 개 대응 → 첫 번째 토큰이 appid, 나머지는 name
+            parts = line.split()
+            appid = parts[0]
+            name = " ".join(parts[1:])
 
-            failed.append((appid.strip(), name.strip()))
+            failed.append((appid, name))
 
     return failed
 
