@@ -194,7 +194,7 @@
 2436940	Sephiria
 1045720	The Coma 2: Vicious Sisters
 600090	The Coma: Recut
-1573100	Subterrain
+1573100	Subterrain 2
 1573100	Subterrain: Mines of Titan
 938220	TAPSONIC BOLD
 2347910	Seal: WHAT the FUN
