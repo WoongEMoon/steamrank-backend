@@ -2,9 +2,6 @@ import os
 import requests
 import psycopg2
 
-# ================================
-#           DB 설정
-# ================================
 DB = {
     "host": "dpg-d4i86fkhg0os73fi4keg-a",
     "dbname": "steamrank_db",
@@ -24,11 +21,11 @@ def get_db_connection():
         sslmode=DB["sslmode"],
     )
 
-# ================================
-#      appdetails API
-# ================================
+# ========================================
+#  API 요청 (manual 버전과 동일하게 통일)
+# ========================================
 def fetch_appdetails(appid: str):
-    url = f"https://store.steampowered.com/api/appdetails?appids={appid}"
+    url = f"https://store.steampowered.com/api/appdetails?appids={appid}&cc=kr&l=korean"
 
     try:
         resp = requests.get(url, timeout=8)
@@ -40,21 +37,23 @@ def fetch_appdetails(appid: str):
 
     entry = data.get(str(appid))
     if not isinstance(entry, dict) or not entry.get("success"):
-        print(f"✖ API entry 이상 ({appid})")
         return None
 
     game = entry.get("data", {})
     profile_img = game.get("header_image")
 
-    # ===============================
-    # 🔥 가격 처리 (최종본)
-    # ===============================
-    price_str = None
+    # 무료 판단
+    is_free = (
+        game.get("is_free") is True
+        or game.get("is_free_license") is True
+        or game.get("is_free_to_play") is True
+    )
+
     price_info = game.get("price_overview")
-    is_free = game.get("is_free", False)
+    price_str = None
 
     if is_free:
-        price_str = "free"
+        price_str = "무료 플레이"
 
     elif isinstance(price_info, dict):
         currency = price_info.get("currency")
@@ -73,9 +72,10 @@ def fetch_appdetails(appid: str):
 
     return profile_img, price_str
 
-# ================================
-#           DB UPDATE
-# ================================
+
+# ========================================
+#  DB UPSERT
+# ========================================
 def update_game_in_db(conn, appid: str, name: str, details):
     profile_img, price = details
 
@@ -93,9 +93,10 @@ def update_game_in_db(conn, appid: str, name: str, details):
             (appid, name, profile_img, price),
         )
 
-# ================================
-#        실패 파일 처리
-# ================================
+
+# ========================================
+#  실패 리스트 불러오기
+# ========================================
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 FAILED_FILE = os.path.join(BASE_DIR, "games_failed.txt")
 
@@ -119,22 +120,23 @@ def load_failed_games():
 
     return failed
 
-# ================================
-#           전체 처리
-# ================================
+
+# ========================================
+#  전체 재처리
+# ========================================
 def retry_failed():
     failed_games = load_failed_games()
-    print(f"\n▶ 재시도 대상: {len(failed_games)}개\n")
+    print(f"▶ 재시도 대상: {len(failed_games)}개\n")
 
     conn = get_db_connection()
 
     try:
         for appid, name in failed_games:
-            print(f"\n▶ 재시도: {appid}   {name}")
+            print(f"\n▶ 재시도: {appid}  {name}")
 
             details = fetch_appdetails(appid)
             if not details:
-                print(f"✖ 실패 → {appid} {name}")
+                print(f"✖ API 재시도 실패 ({appid})")
                 continue
 
             try:
@@ -143,7 +145,7 @@ def retry_failed():
                 print(f"✔ 완료: {name}")
             except Exception as e:
                 conn.rollback()
-                print(f"✖ DB 오류: {appid} {name}: {e}")
+                print(f"✖ DB 오류 ({appid} {name}): {e}")
 
     finally:
         conn.close()

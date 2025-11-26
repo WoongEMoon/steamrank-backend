@@ -22,14 +22,14 @@ def get_db_connection():
         sslmode=DB["sslmode"],
     )
 
-# ===============================
-#      강화된 appdetails API
-# ===============================
+# =======================================================
+#  Steam appdetails API (가격/이미지/무료 여부 정확 버전)
+# =======================================================
 def fetch_appdetails(appid: str):
-    url = f"https://store.steampowered.com/api/appdetails?appids={appid}"
+    url = f"https://store.steampowered.com/api/appdetails?appids={appid}&cc=kr&l=korean"
 
     try:
-        resp = requests.get(url, timeout=6)
+        resp = requests.get(url, timeout=8)
         resp.raise_for_status()
         data = resp.json()
     except Exception as e:
@@ -37,58 +37,52 @@ def fetch_appdetails(appid: str):
         return None
 
     entry = data.get(str(appid))
-    if not isinstance(entry, dict) or not entry.get("success", False):
-        print(f"✖ API 데이터 이상 또는 success=False ({appid})")
+    if not isinstance(entry, dict) or not entry.get("success"):
+        print(f"✖ API 성공=False ({appid})")
         return None
 
-    game = entry.get("data")
-    if not isinstance(game, dict):
-        print(f"✖ data 없음 ({appid}) → {game}")
-        return None
-
-    # 썸네일
+    game = entry.get("data", {})
     profile_img = game.get("header_image")
 
-    # ===============================
-    # 🔥 가격 처리 (최종본)
-    # ===============================
-    price_str = None
+    # -----------------------------
+    # 🔥 무료 여부 체크 (완전판)
+    # -----------------------------
+    is_free = (
+        game.get("is_free") is True
+        or game.get("is_free_license") is True
+        or game.get("is_free_to_play") is True
+    )
+
+    # -----------------------------
+    # 🔥 가격 파싱 (완전판)
+    # -----------------------------
     price_info = game.get("price_overview")
-    is_free = game.get("is_free", False)
+    price_str = None
 
     if is_free:
-        price_str = "free"
+        price_str = "무료 플레이"
 
     elif isinstance(price_info, dict):
         currency = price_info.get("currency")
-        final = price_info.get("final")  # 정수 값
-        formatted = price_info.get("final_formatted")  # 예: "₩ 64,800"
+        final = price_info.get("final")
+        formatted = price_info.get("final_formatted")
 
         if final is not None:
-            # ★ 한국 원화
             if currency == "KRW":
-                price_str = formatted  # 예: "₩ 64,800"
-
-            # ★ 일본 엔화
+                price_str = formatted                     # 예: ₩ 64,800
             elif currency == "JPY":
                 price_str = f"¥{final:,}"
-
-            # ★ 미국 달러
             elif currency == "USD":
                 price_str = f"${final / 100:.2f}"
-
-            # ★ 기타 통화
             else:
                 price_str = formatted if formatted else str(final)
-
-    # price_str가 None이면 자동으로 React에서 "가격 정보 없음"
 
     return profile_img, price_str
 
 
-# ===============================
-#        DB UPDATE
-# ===============================
+# =======================================================
+#  DB UPSERT (중복/가격/이미지 정확 반영)
+# =======================================================
 def update_game_in_db(conn, appid: str, name: str, details):
     profile_img, price = details
 
@@ -107,9 +101,9 @@ def update_game_in_db(conn, appid: str, name: str, details):
         )
 
 
-# ===============================
-#       파일 전체 처리
-# ===============================
+# =======================================================
+#  전체 파일 처리
+# =======================================================
 def process_file(file_path: str):
 
     print(f"▶ 파일 로딩: {file_path}")
@@ -125,17 +119,17 @@ def process_file(file_path: str):
                 try:
                     appid, name = line.split("\t", 1)
                 except ValueError:
-                    print(f"✖ 형식 잘못됨: {line}")
+                    print(f"✖ 형식 이상: {line}")
                     continue
 
                 appid = appid.strip()
                 name = name.strip()
 
-                print(f"\n▶ 처리 중: {appid}   {name}")
+                print(f"\n▶ 처리 중: {appid}  {name}")
 
                 details = fetch_appdetails(appid)
                 if not details:
-                    print(f"✖ API 실패: {appid} {name}")
+                    print(f"✖ API 데이터 없음: {appid} {name}")
                     continue
 
                 try:
@@ -144,7 +138,7 @@ def process_file(file_path: str):
                     print(f"✔ 완료: {name}")
                 except Exception as e:
                     conn.rollback()
-                    print(f"✖ DB 오류: {appid} {name}: {e}")
+                    print(f"✖ DB 오류 ({appid} {name}): {e}")
 
     finally:
         conn.close()
