@@ -44,7 +44,7 @@ def fetch_appdetails(appid: str):
         return None
 
     if not entry.get("success", False):
-        print(f"✖ success=False ({appid})")
+        print(f"✖ appdetails success=False ({appid})")
         return None
 
     game = entry.get("data")
@@ -52,16 +52,32 @@ def fetch_appdetails(appid: str):
         print(f"✖ data 필드 없음 ({appid}) → {game}")
         return None
 
-    # 이미지
+    # 썸네일 이미지
     profile_img = game.get("header_image")
 
-    # 가격
-    price = None
+    # 🔥 가격 처리
+    price_str = None
     price_info = game.get("price_overview")
-    if isinstance(price_info, dict):
-        price = price_info.get("final")
+    is_free = game.get("is_free", False)
 
-    return profile_img, price
+    if is_free:
+        # 무료 플레이
+        price_str = "free"
+    elif isinstance(price_info, dict):
+        currency = price_info.get("currency")
+        final = price_info.get("final")  # 예: USD 10.99 -> 1099
+
+        if final is not None:
+            # 달러인 경우 소수점 둘째 자리까지 나누기
+            if currency == "USD":
+                price_str = f"{final / 100:.2f}"  # "10.99" 형태
+            else:
+                # 원화/엔화 등은 소수점 없이 사용 (나중에 KRW 포맷에 쓰자)
+                price_str = str(final)
+    # price_str 가 None 이면 "가격 정보 없음" 으로 처리
+
+    return profile_img, price_str
+
 
 # ================================
 #           DB UPDATE
